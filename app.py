@@ -156,15 +156,12 @@ if results:
             st.plotly_chart(fig, use_container_width=True)
 
 # =========================
-# Fibonacci Levels Calculator
+# Fibonacci Levels Calculator with Trend Guidance
 # =========================
-st.subheader("📏 Fibonacci Levels Calculator")
+st.subheader("📏 Fibonacci Levels Calculator & Trend Guidance")
 
-fib_ticker = st.selectbox(
-    "Select Ticker for Fibonacci Levels",
-    options=[r['ticker'] for r in results]
-)
-
+# Allow any ticker
+fib_ticker = st.text_input("Enter Ticker (Stock or Crypto, e.g. AAPL, BTC-USD)", value="AAPL")
 fib_period = st.selectbox(
     "Select Period for Fibonacci Calculation",
     options=['1mo', '3mo', '6mo', '1y', '2y', '5y'],
@@ -172,31 +169,83 @@ fib_period = st.selectbox(
 )
 
 if fib_ticker:
-    fib_data = yf.Ticker(fib_ticker).history(period=fib_period)
-    if not fib_data.empty:
-        high_price = fib_data['High'].max()
-        low_price = fib_data['Low'].min()
-        current_price = fib_data['Close'][-1]
+    try:
+        # Fetch historical data
+        fib_data = yf.Ticker(fib_ticker).history(period=fib_period)
+        if not fib_data.empty:
+            high_price = fib_data['High'].max()
+            low_price = fib_data['Low'].min()
+            current_price = fib_data['Close'][-1]
 
-        levels = {
-            "0.0% (Low)": low_price,
-            "23.6%": low_price + 0.236 * (high_price - low_price),
-            "38.2%": low_price + 0.382 * (high_price - low_price),
-            "50.0%": low_price + 0.5 * (high_price - low_price),
-            "61.8%": low_price + 0.618 * (high_price - low_price),
-            "100% (High)": high_price
-        }
+            # Calculate Fibonacci levels
+            levels = {
+                "0.0% (Low)": low_price,
+                "23.6%": low_price + 0.236 * (high_price - low_price),
+                "38.2%": low_price + 0.382 * (high_price - low_price),
+                "50.0%": low_price + 0.5 * (high_price - low_price),
+                "61.8%": low_price + 0.618 * (high_price - low_price),
+                "100% (High)": high_price
+            }
 
-        fib_df = pd.DataFrame(levels.items(), columns=["Level", "Price"])
-        st.write(f"**{fib_ticker}** High: {round(high_price,2)}, Low: {round(low_price,2)}, Current: {round(current_price,2)}")
-        st.table(fib_df)
+            # Display levels in a table
+            fib_df = pd.DataFrame(levels.items(), columns=["Level", "Price"])
+            st.write(f"**{fib_ticker.upper()}** — High: {round(high_price,2)}, Low: {round(low_price,2)}, Current: {round(current_price,2)}")
+            st.table(fib_df)
 
-        # Optional: Plot Fibonacci levels on price chart
-        fig_fib = go.Figure()
-        fig_fib.add_trace(go.Scatter(x=fib_data.index, y=fib_data['Close'], mode="lines", name="Close Price"))
-        for level, price in levels.items():
-            fig_fib.add_hline(y=price, line_dash="dash", line_color="orange", annotation_text=level, annotation_position="top left")
-        fig_fib.update_layout(title=f"{fib_ticker} Fibonacci Levels", xaxis_rangeslider_visible=False)
-        st.plotly_chart(fig_fib, use_container_width=True)
-    else:
-        st.warning("No historical data available for this ticker.")
+            # Plot Fibonacci levels on price chart
+            fig_fib = go.Figure()
+            fig_fib.add_trace(go.Scatter(
+                x=fib_data.index,
+                y=fib_data['Close'],
+                mode="lines",
+                name="Close Price"
+            ))
+
+            for level_name, price in levels.items():
+                fig_fib.add_hline(
+                    y=price,
+                    line_dash="dash",
+                    line_color="orange",
+                    annotation_text=level_name,
+                    annotation_position="top left"
+                )
+
+            fig_fib.update_layout(
+                title=f"{fib_ticker.upper()} Fibonacci Levels",
+                xaxis_rangeslider_visible=False
+            )
+            st.plotly_chart(fig_fib, use_container_width=True)
+
+            # =========================
+            # Trend & Trading Guidance
+            # =========================
+            st.markdown("### 📌 Trend Analysis & Guidance")
+            
+            trend = ""
+            guidance = ""
+
+            # Simple trend logic based on price relative to 50% Fibonacci level
+            fib_50 = levels["50.0%"]
+            fib_618 = levels["61.8%"]
+            fib_382 = levels["38.2%"]
+
+            if current_price > fib_618:
+                trend = "🔥 Strong Uptrend"
+                guidance = "Price is above 61.8% retracement. Consider bullish continuation or scaling in on dips."
+            elif current_price > fib_50:
+                trend = "📈 Moderate Uptrend"
+                guidance = "Price is between 50% and 61.8%. Look for support near 50% retracement for long entries."
+            elif current_price > fib_382:
+                trend = "⚖️ Neutral / Consolidation"
+                guidance = "Price is between 38.2% and 50%. Market may be consolidating. Watch for breakout or breakdown."
+            else:
+                trend = "🔻 Downtrend"
+                guidance = "Price is below 38.2% retracement. Be cautious with longs; potential support near low."
+
+            st.markdown(f"**Trend:** {trend}")
+            st.markdown(f"**Guidance:** {guidance}")
+
+        else:
+            st.warning("No historical data found for this ticker.")
+    except Exception as e:
+        st.error(f"Error fetching data: {e}")
