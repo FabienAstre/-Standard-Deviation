@@ -17,21 +17,16 @@ and **Options sentiment** with actionable guidance.
 # =========================
 tickers_input = st.text_input(
     "Enter tickers (comma-separated, e.g., AAPL, MSFT, BTC-USD)", 
-    value="AAPL, MSFT, BTC-USD", 
-    key="tickers_input"
+    value="AAPL, MSFT, BTC-USD"
 )
-
 period = st.selectbox(
     "Select price history period for analysis", 
-    ['1mo', '3mo', '6mo', '1y', '2y', '5y'],
-    key="period_select"
+    ['1mo', '3mo', '6mo', '1y', '2y', '5y']
 )
-
 show_only_undervalued = st.checkbox(
     "Show only Undervalued Assets (Z-score < -1)", 
-    value=False, key="undervalued_check"
+    value=False
 )
-
 tickers = [t.strip().upper() for t in tickers_input.split(",") if t.strip()]
 
 # =========================
@@ -45,12 +40,6 @@ def calculate_rsi(prices, window=14):
     return 100 - (100 / (1 + rs))
 
 def analyze_asset(ticker, period='6mo'):
-    """
-    Fetch historical data and compute:
-    - Current price, mean, std dev, Z-score
-    - RSI
-    - Fundamentals (P/E, P/B, Div Yield, Market Cap)
-    """
     try:
         data = yf.Ticker(ticker).history(period=period)
         if data.empty:
@@ -65,7 +54,6 @@ def analyze_asset(ticker, period='6mo'):
     z_score = (current_price - mean_price) / std_dev
     rsi = calculate_rsi(close_prices).iloc[-1]
 
-    # Price signal
     if z_score < -2:
         signal = "🔻 Strongly Undervalued"
     elif z_score < -1:
@@ -77,7 +65,6 @@ def analyze_asset(ticker, period='6mo'):
     else:
         signal = "✅ Normal Range"
 
-    # Fundamentals
     info = yf.Ticker(ticker).info
     pe = info.get("trailingPE", None)
     pb = info.get("priceToBook", None)
@@ -94,12 +81,7 @@ def analyze_asset(ticker, period='6mo'):
         'signal': signal,
         'prices': close_prices,
         'data': data,
-        'info': {
-            'P/E': pe,
-            'P/B': pb,
-            'Div Yield': div_yield,
-            'Market Cap': market_cap
-        }
+        'info': {'P/E': pe, 'P/B': pb, 'Div Yield': div_yield, 'Market Cap': market_cap}
     }
 
 # =========================
@@ -116,7 +98,7 @@ for ticker in tickers:
         st.warning(f"No data available for {ticker}")
 
 # =========================
-# Display Screener Table
+# Screener Table
 # =========================
 if results:
     df = pd.DataFrame([{
@@ -160,7 +142,6 @@ for r in results:
         fig.add_trace(go.Scatter(x=hist_data.index, y=ma50, mode="lines", name="MA 50", line=dict(color="blue")))
         fig.add_trace(go.Scatter(x=hist_data.index, y=ma200, mode="lines", name="MA 200", line=dict(color="orange")))
         
-        # Std dev bands
         fig.add_hline(y=r['mean_price'], line_dash="dash", line_color="green", annotation_text="Mean")
         fig.add_hline(y=r['mean_price'] + r['std_dev'], line_dash="dash", line_color="orange", annotation_text="+1 STD")
         fig.add_hline(y=r['mean_price'] - r['std_dev'], line_dash="dash", line_color="orange", annotation_text="-1 STD")
@@ -257,7 +238,6 @@ if opt_ticker:
             st.write("Top 5 Put Options by Volume")
             st.dataframe(puts.sort_values("volume", ascending=False).head(5))
 
-            # Sentiment
             call_oi = calls['openInterest'].sum()
             put_oi = puts['openInterest'].sum()
             if call_oi > put_oi * 1.2:
@@ -353,24 +333,11 @@ for r in results:
 
 rec_df = pd.DataFrame(recommendations)
 st.dataframe(rec_df, use_container_width=True)
-st.markdown("""
-
-# Combined Recommendation Dashboard explanation
-st.markdown("""
-**Explanation:**  
-- **Z-score**: Price vs historical mean  
-- **RSI**: Oversold (<30) = bullish, Overbought (>70) = bearish  
-- **Fib Trend**: Fibonacci-based trend assessment  
-- **Options Sentiment**: Calls vs Puts open interest  
-- **Combined Score**: Sum of all metric weights  
-- **Recommendation**: Strong Buy / Buy / Hold / Sell
-""")  # ✅ close this markdown
 
 # ======================
 # Options Education Section
 # ======================
 st.subheader("📘 Options Basics & Explanation")
-
 st.markdown("""
 **Options come in two main types:**
 
@@ -385,31 +352,31 @@ st.markdown("""
 ---
 
 ### 💡 Quick Tips:
-- **Calls = Bullish bets** (profit if stock rises).  
-- **Puts = Bearish bets** (profit if stock falls).  
-- **Selling Covered Calls** → Collect premium 💵 but risk losing shares if stock rallies past strike.  
-- **Selling Cash-Secured Puts** → Collect premium 💵 but must buy shares if stock falls below strike.  
+- **Calls = Bullish bets**  
+- **Puts = Bearish bets**  
+- **Selling Covered Calls** → Collect premium but risk losing shares if stock rallies past strike.  
+- **Selling Cash-Secured Puts** → Collect premium but must buy shares if stock falls below strike.  
 
 👉 Options are used for **hedging, speculation, and income strategies**.
 """)
 
 # =========================
-# 🎓 Options Payoff Simulator
+# Options Payoff Simulator
 # =========================
 st.subheader("🎓 Options Education & Payoff Simulator")
 
 colA, colB = st.columns([1,1])
 with colA:
-    edu_ticker = st.text_input("Ticker (to auto-seed current price)", value="AAPL", key="edu_ticker")
+    edu_ticker = st.text_input("Ticker for payoff simulation", value="AAPL", key="edu_ticker2")
 with colB:
-    use_live_price = st.checkbox("Auto-fetch current price with yfinance", value=True, key="edu_use_live")
+    use_live_price = st.checkbox("Auto-fetch current price", value=True, key="edu_use_live2")
 
 def get_current_price(ticker: str, fallback: float = 100.0):
     try:
         h = yf.Ticker(ticker).history(period="5d")
         if not h.empty:
             return float(h["Close"][-1])
-    except Exception:
+    except:
         pass
     return fallback
 
@@ -418,27 +385,27 @@ st.markdown(f"**Seed Price (S₀)**: `{round(S0,2)}` — baseline for payoff cha
 
 strategy = st.selectbox(
     "Choose a strategy",
-    ["Long Call", "Long Put", "Covered Call (own 100 shares)", "Cash-Secured Put", "Bull Call Spread"],
-    key="edu_strategy"
+    ["Long Call", "Long Put", "Covered Call", "Cash-Secured Put", "Bull Call Spread"],
+    key="edu_strategy2"
 )
 
 rng = st.slider(
     "Underlying price range at expiration (Sₜ)",
-    min_value=max(1, int(S0*0.2)),
+    min_value=max(1,int(S0*0.2)),
     max_value=int(S0*2.0),
     value=(int(S0*0.6), int(S0*1.4)),
     step=1,
-    key="edu_range"
+    key="edu_range2"
 )
 S_grid = np.linspace(rng[0], rng[1], 300)
 
-K = st.number_input("Strike Price (K)", value=int(S0), step=1)
-premium = st.number_input("Option Premium ($)", value=5.0, step=0.1)
+K = st.number_input("Strike Price (K)", value=int(S0), step=1, key="edu_strike")
+premium = st.number_input("Option Premium ($)", value=5.0, step=0.1, key="edu_premium")
 
 if strategy == "Long Call":
-    payoff = np.maximum(S_grid - K, 0) - premium
+    payoff = np.maximum(S_grid - K,0) - premium
 elif strategy == "Long Put":
-    payoff = np.maximum(K - S_grid, 0) - premium
+    payoff = np.maximum(K - S_grid,0) - premium
 else:
     payoff = np.zeros_like(S_grid)
 
@@ -447,16 +414,6 @@ fig_payoff.add_trace(go.Scatter(x=S_grid, y=payoff, mode='lines', name="Payoff")
 fig_payoff.update_layout(
     title=f"{strategy} Payoff at Expiration",
     xaxis_title="Underlying Price Sₜ",
-    yaxis_title="Profit / Loss",
+    yaxis_title="Profit / Loss"
 )
 st.plotly_chart(fig_payoff, use_container_width=True)
-
-    
-**Explanation:**  
-- **Z-score**: Price vs historical mean  
-- **RSI**: Oversold (<30) = bullish, Overbought (>70) = bearish  
-- **Fib Trend**: Fibonacci-based trend assessment  
-- **Options Sentiment**: Calls vs Puts open interest  
-- **Combined Score**: Sum of all metric weights  
-- **Recommendation**: Strong Buy / Buy / Hold / Sell
-""")
