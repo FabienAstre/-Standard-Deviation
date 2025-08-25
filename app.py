@@ -356,6 +356,33 @@ st.dataframe(rec_df, use_container_width=True)
 st.markdown("""
 
 
+# ======================
+# Options Education Section
+# ======================
+st.subheader("📘 Options Basics & Explanation")
+
+st.markdown("""
+**Options come in two main types:**
+
+- **Call Option** → Gives the buyer the right (not the obligation) to **BUY** a stock at a fixed price (strike) before expiration.  
+   ✅ Traders buy Calls if they think the stock will **go up**.  
+   ✅ Example: Buy a Call at $50 strike. If stock rises to $70, you can still buy at $50 → profit.  
+
+- **Put Option** → Gives the buyer the right (not the obligation) to **SELL** a stock at a fixed price before expiration.  
+   ✅ Traders buy Puts if they think the stock will **go down**.  
+   ✅ Example: Buy a Put at $50 strike. If stock falls to $30, you can still sell at $50 → profit.  
+
+---
+
+### 💡 Quick Tips:
+- **Calls = Bullish bets** (profit if stock price rises).  
+- **Puts = Bearish bets** (profit if stock price falls).  
+- **Selling Covered Calls** → You collect premium 💵, but agree to sell your shares if the stock rises above the strike.  
+- **Selling Cash-Secured Puts** → You collect premium 💵, but agree to buy shares if the stock falls below the strike.  
+
+This is why options are often used for **hedging, speculation, or generating income**.
+""")
+
 # =========================
 # 🎓 Options Education & Payoff Simulator
 # =========================
