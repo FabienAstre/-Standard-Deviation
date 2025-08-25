@@ -154,3 +154,49 @@ if results:
 
             fig.update_layout(title=f"{r['ticker']} Price Chart", xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
+
+# =========================
+# Fibonacci Levels Calculator
+# =========================
+st.subheader("📏 Fibonacci Levels Calculator")
+
+fib_ticker = st.selectbox(
+    "Select Ticker for Fibonacci Levels",
+    options=[r['ticker'] for r in results]
+)
+
+fib_period = st.selectbox(
+    "Select Period for Fibonacci Calculation",
+    options=['1mo', '3mo', '6mo', '1y', '2y', '5y'],
+    index=2
+)
+
+if fib_ticker:
+    fib_data = yf.Ticker(fib_ticker).history(period=fib_period)
+    if not fib_data.empty:
+        high_price = fib_data['High'].max()
+        low_price = fib_data['Low'].min()
+        current_price = fib_data['Close'][-1]
+
+        levels = {
+            "0.0% (Low)": low_price,
+            "23.6%": low_price + 0.236 * (high_price - low_price),
+            "38.2%": low_price + 0.382 * (high_price - low_price),
+            "50.0%": low_price + 0.5 * (high_price - low_price),
+            "61.8%": low_price + 0.618 * (high_price - low_price),
+            "100% (High)": high_price
+        }
+
+        fib_df = pd.DataFrame(levels.items(), columns=["Level", "Price"])
+        st.write(f"**{fib_ticker}** High: {round(high_price,2)}, Low: {round(low_price,2)}, Current: {round(current_price,2)}")
+        st.table(fib_df)
+
+        # Optional: Plot Fibonacci levels on price chart
+        fig_fib = go.Figure()
+        fig_fib.add_trace(go.Scatter(x=fib_data.index, y=fib_data['Close'], mode="lines", name="Close Price"))
+        for level, price in levels.items():
+            fig_fib.add_hline(y=price, line_dash="dash", line_color="orange", annotation_text=level, annotation_position="top left")
+        fig_fib.update_layout(title=f"{fib_ticker} Fibonacci Levels", xaxis_rangeslider_visible=False)
+        st.plotly_chart(fig_fib, use_container_width=True)
+    else:
+        st.warning("No historical data available for this ticker.")
