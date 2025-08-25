@@ -354,7 +354,6 @@ for r in results:
 rec_df = pd.DataFrame(recommendations)
 st.dataframe(rec_df, use_container_width=True)
 st.markdown("""
-
 # ======================
 # Options Education Section
 # ======================
@@ -364,12 +363,12 @@ st.markdown("""
 **Options come in two main types:**
 
 - **Call Option** → Right (not obligation) to **BUY** a stock at strike price before expiration.  
-   ✅ Buy Calls if you think stock will **go up**.  
-   ✅ Example: Buy Call at $50. If stock rises to $70 → profit.
+  ✅ Buy Calls if you think stock will **go up**.  
+  ✅ Example: Buy Call at $50. If stock rises to $70 → profit.
 
 - **Put Option** → Right (not obligation) to **SELL** a stock at strike price before expiration.  
-   ✅ Buy Puts if you think stock will **go down**.  
-   ✅ Example: Buy Put at $50. If stock falls to $30 → profit.
+  ✅ Buy Puts if you think stock will **go down**.  
+  ✅ Example: Buy Put at $50. If stock falls to $30 → profit.
 
 ---
 
@@ -403,7 +402,7 @@ def get_current_price(ticker: str, fallback: float = 100.0):
         pass
     return fallback
 
-S0 = get_current_price(edu_ticker, fallback=100.0) if use_live_price else 100.0
+S0 = get_current_price(edu_ticker) if use_live_price else 100.0
 st.markdown(f"**Seed Price (S₀)**: `{round(S0, 2)}` — baseline for payoff chart")
 
 strategy = st.selectbox(
@@ -423,9 +422,27 @@ rng = st.slider(
 )
 S_grid = np.linspace(rng[0], rng[1], 300)
 
-# === Strategy inputs & payoff calc (same as before) ===
-# ... keep your payoff logic here ...
+# === Example Payoff Logic for Long Call ===
+K = st.number_input("Strike Price (K)", value=int(S0), step=1)
+premium = st.number_input("Option Premium ($)", value=5.0, step=0.1)
 
+if strategy == "Long Call":
+    payoff = np.maximum(S_grid - K, 0) - premium
+elif strategy == "Long Put":
+    payoff = np.maximum(K - S_grid, 0) - premium
+else:
+    payoff = np.zeros_like(S_grid)  # placeholder for other strategies
+
+# Plot payoff
+import plotly.graph_objects as go
+fig_payoff = go.Figure()
+fig_payoff.add_trace(go.Scatter(x=S_grid, y=payoff, mode='lines', name="Payoff"))
+fig_payoff.update_layout(
+    title=f"{strategy} Payoff at Expiration",
+    xaxis_title="Underlying Price Sₜ",
+    yaxis_title="Profit / Loss",
+)
+st.plotly_chart(fig_payoff, use_container_width=True)
 
     
 **Explanation:**  
