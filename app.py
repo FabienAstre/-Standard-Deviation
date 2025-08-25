@@ -354,6 +354,18 @@ for r in results:
 rec_df = pd.DataFrame(recommendations)
 st.dataframe(rec_df, use_container_width=True)
 st.markdown("""
+
+# Combined Recommendation Dashboard explanation
+st.markdown("""
+**Explanation:**  
+- **Z-score**: Price vs historical mean  
+- **RSI**: Oversold (<30) = bullish, Overbought (>70) = bearish  
+- **Fib Trend**: Fibonacci-based trend assessment  
+- **Options Sentiment**: Calls vs Puts open interest  
+- **Combined Score**: Sum of all metric weights  
+- **Recommendation**: Strong Buy / Buy / Hold / Sell
+""")  # ✅ close this markdown
+
 # ======================
 # Options Education Section
 # ======================
@@ -382,7 +394,7 @@ st.markdown("""
 """)
 
 # =========================
-# 🎓 Options Education & Payoff Simulator
+# 🎓 Options Payoff Simulator
 # =========================
 st.subheader("🎓 Options Education & Payoff Simulator")
 
@@ -392,7 +404,6 @@ with colA:
 with colB:
     use_live_price = st.checkbox("Auto-fetch current price with yfinance", value=True, key="edu_use_live")
 
-# Get starting price
 def get_current_price(ticker: str, fallback: float = 100.0):
     try:
         h = yf.Ticker(ticker).history(period="5d")
@@ -403,7 +414,7 @@ def get_current_price(ticker: str, fallback: float = 100.0):
     return fallback
 
 S0 = get_current_price(edu_ticker) if use_live_price else 100.0
-st.markdown(f"**Seed Price (S₀)**: `{round(S0, 2)}` — baseline for payoff chart")
+st.markdown(f"**Seed Price (S₀)**: `{round(S0,2)}` — baseline for payoff chart")
 
 strategy = st.selectbox(
     "Choose a strategy",
@@ -411,7 +422,6 @@ strategy = st.selectbox(
     key="edu_strategy"
 )
 
-# Price range slider
 rng = st.slider(
     "Underlying price range at expiration (Sₜ)",
     min_value=max(1, int(S0*0.2)),
@@ -422,7 +432,6 @@ rng = st.slider(
 )
 S_grid = np.linspace(rng[0], rng[1], 300)
 
-# === Example Payoff Logic for Long Call ===
 K = st.number_input("Strike Price (K)", value=int(S0), step=1)
 premium = st.number_input("Option Premium ($)", value=5.0, step=0.1)
 
@@ -431,10 +440,8 @@ if strategy == "Long Call":
 elif strategy == "Long Put":
     payoff = np.maximum(K - S_grid, 0) - premium
 else:
-    payoff = np.zeros_like(S_grid)  # placeholder for other strategies
+    payoff = np.zeros_like(S_grid)
 
-# Plot payoff
-import plotly.graph_objects as go
 fig_payoff = go.Figure()
 fig_payoff.add_trace(go.Scatter(x=S_grid, y=payoff, mode='lines', name="Payoff"))
 fig_payoff.update_layout(
