@@ -382,6 +382,9 @@ def get_current_price(ticker: str, fallback: float = 100.0):
 S0 = get_current_price(edu_ticker) if use_live_price else 100.0
 st.markdown(f"**Seed Price (S₀)**: `{round(S0,2)}` — baseline for payoff chart")
 
+# -----------------------------
+# Strategy Selection
+# -----------------------------
 strategy = st.selectbox(
     "Choose a strategy",
     ["Long Call", "Long Put", "Covered Call", "Cash-Secured Put", "Bull Call Spread"],
@@ -398,21 +401,109 @@ rng = st.slider(
 )
 S_grid = np.linspace(rng[0], rng[1], 300)
 
+# -----------------------------
+# Inputs
+# -----------------------------
 K = st.number_input("Strike Price (K)", value=int(S0), step=1, key="edu_strike")
 premium = st.number_input("Option Premium ($)", value=5.0, step=0.1, key="edu_premium")
+K2 = None
 
+if strategy == "Bull Call Spread":
+    K2 = st.number_input("Second Strike Price (K2)", value=int(S0+10), step=1, key="edu_strike2")
+
+# -----------------------------
+# Payoff Logic
+# -----------------------------
 if strategy == "Long Call":
     payoff = np.maximum(S_grid - K,0) - premium
+    breakeven = K + premium
+    max_loss, max_profit = -premium, "Unlimited"
+
 elif strategy == "Long Put":
     payoff = np.maximum(K - S_grid,0) - premium
+    breakeven = K - premium
+    max_loss, max_profit = -premium, (K - premium)
+
+elif strategy == "Covered Call":
+    payoff = (S_grid - S0) + premium - np.maximum(S_grid - K,0)
+    breakeven = S0 - premium
+    max_loss, max_profit = -(S0 - premium), (K - S0 + premium)
+
+elif strategy == "Cash-Secured Put":
+    payoff = premium - np.maximum(K - S_grid,0)
+    breakeven = K - premium
+    max_loss, max_profit = -(K - premium), premium
+
+elif strategy == "Bull Call Spread":
+    payoff = np.maximum(S_grid - K,0) - np.maximum(S_grid - K2,0) - premium
+    breakeven = K + premium
+    max_loss = -premium
+    max_profit = (K2 - K - premium)
+
 else:
     payoff = np.zeros_like(S_grid)
+    breakeven, max_loss, max_profit = None, None, None
 
+# -----------------------------
+# Plot Payoff Chart
+# -----------------------------
 fig_payoff = go.Figure()
-fig_payoff.add_trace(go.Scatter(x=S_grid, y=payoff, mode='lines', name="Payoff"))
+fig_payoff.add_trace(go.Scatter(x=S_grid, y=payoff, mode='lines', name="Payoff", line=dict(color="royalblue")))
+
+# Breakeven marker
+if breakeven:
+    fig_payoff.add_vline(x=breakeven, line=dict(dash="dot", color="green"))
+    fig_payoff.add_annotation(x=breakeven, y=0, text="Breakeven", showarrow=True, arrowhead=2)
+
 fig_payoff.update_layout(
     title=f"{strategy} Payoff at Expiration",
     xaxis_title="Underlying Price Sₜ",
-    yaxis_title="Profit / Loss"
+    yaxis_title="Profit / Loss",
+    showlegend=False,
+    height=500
 )
 st.plotly_chart(fig_payoff, use_container_width=True)
+
+# -----------------------------
+# Insights
+# -----------------------------
+st.markdown("### 📊 Strategy Insights")
+st.write(f"**Breakeven Price:** {breakeven}")
+st.write(f"**Max Profit:** {max_profit}")
+st.write(f"**Max Loss:** {max_loss}")
+# -----------------------------
+# Recommendation Logic
+# -----------------------------
+recommendation = ""
+if strategy == "Long Call":
+    if S0 < K:
+        recommendation = "🟢 Consider Buying Call (expect price rise above strike)"
+    else:
+        recommendation = "⚠️ Call is in-the-money; check premium before buying"
+
+elif strategy == "Long Put":
+    if S0 > K:
+        recommendation = "🟢 Consider Buying Put (expect price drop below strike)"
+    else:
+        recommendation = "⚠️ Put is in-the-money; check premium before buying"
+
+elif strategy == "Covered Call":
+    if S0 >= K:
+        recommendation = "🟡 Covered Call: stock may get called away, collect premium"
+    else:
+        recommendation = "🟢 Covered Call: collect premium with moderate upside"
+
+elif strategy == "Cash-Secured Put":
+    if S0 > K:
+        recommendation = "🟢 Sell Put to potentially acquire stock at discount"
+    else:
+        recommendation = "⚠️ Strike below current price; consider risk"
+
+elif strategy == "Bull Call Spread":
+    if S0 < K:
+        recommendation = "🟢 Bull Call Spread: moderate bullish view"
+    else:
+        recommendation = "🟡 Spread might be slightly in-the-money; limited upside"
+
+st.markdown(f"### 💡 Recommendation: {recommendation}")
+
