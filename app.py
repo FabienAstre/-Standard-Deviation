@@ -120,6 +120,85 @@ if results:
     st.download_button("Download CSV", data=df.to_csv(index=False), file_name="screener_results.csv")
 
 # =========================
+# Combined Recommendation Dashboard
+# =========================
+st.subheader("📊 Combined Trend & Recommendation Dashboard")
+recommendations = []
+
+for r in results:
+    ticker = r['ticker']
+    current_price = r['current_price']
+    z_score = r['z_score']
+    rsi = r['rsi']
+
+    # Fibonacci trend
+    try:
+        fib_data = yf.Ticker(ticker).history(period=period)
+        high_price = fib_data['High'].max()
+        low_price = fib_data['Low'].min()
+        fib_50 = low_price + 0.5*(high_price-low_price)
+        fib_618 = low_price + 0.618*(high_price-low_price)
+        fib_382 = low_price + 0.382*(high_price-low_price)
+        if current_price > fib_618:
+            fib_trend = 2
+        elif current_price > fib_50:
+            fib_trend = 1
+        elif current_price > fib_382:
+            fib_trend = 0
+        else:
+            fib_trend = -1
+    except:
+        fib_trend = 0
+
+    # Z-score weight
+    if z_score < -2: z_weight = 2
+    elif z_score < -1: z_weight = 1
+    elif z_score > 2: z_weight = -2
+    elif z_score > 1: z_weight = -1
+    else: z_weight = 0
+
+    # RSI weight
+    if rsi < 30: rsi_weight = 1
+    elif rsi > 70: rsi_weight = -1
+    else: rsi_weight = 0
+
+    # Options weight
+    try:
+        opt_chain = yf.Ticker(ticker)
+        if opt_chain.options:
+            exp_date = opt_chain.options[0]
+            chain = opt_chain.option_chain(exp_date)
+            call_oi = chain.calls['openInterest'].sum()
+            put_oi = chain.puts['openInterest'].sum()
+            if call_oi > put_oi * 1.2: opt_weight = 1
+            elif put_oi > call_oi * 1.2: opt_weight = -1
+            else: opt_weight = 0
+        else:
+            opt_weight = 0
+    except:
+        opt_weight = 0
+
+    total_score = z_weight + rsi_weight + fib_trend + opt_weight
+    if total_score >= 3: recommendation = "🟢 Strong Buy"
+    elif total_score == 2: recommendation = "🟢 Buy"
+    elif total_score in [0,1]: recommendation = "🟡 Hold"
+    else: recommendation = "🔴 Sell"
+
+    recommendations.append({
+        'Ticker': ticker,
+        'Z-score': round(z_score,2),
+        'RSI': round(rsi,2),
+        'Fib Trend': fib_trend,
+        'Options Sentiment': opt_weight,
+        'Combined Score': total_score,
+        'Recommendation': recommendation
+    })
+
+rec_df = pd.DataFrame(recommendations)
+st.dataframe(rec_df, use_container_width=True)
+
+
+# =========================
 # Candlestick Charts + Indicators
 # =========================
 st.subheader("📊 Price Charts & Indicators")
@@ -256,83 +335,6 @@ if opt_ticker:
     except Exception as e:
         st.error(f"Error fetching options: {e}")
 
-# =========================
-# Combined Recommendation Dashboard
-# =========================
-st.subheader("📊 Combined Trend & Recommendation Dashboard")
-recommendations = []
-
-for r in results:
-    ticker = r['ticker']
-    current_price = r['current_price']
-    z_score = r['z_score']
-    rsi = r['rsi']
-
-    # Fibonacci trend
-    try:
-        fib_data = yf.Ticker(ticker).history(period=period)
-        high_price = fib_data['High'].max()
-        low_price = fib_data['Low'].min()
-        fib_50 = low_price + 0.5*(high_price-low_price)
-        fib_618 = low_price + 0.618*(high_price-low_price)
-        fib_382 = low_price + 0.382*(high_price-low_price)
-        if current_price > fib_618:
-            fib_trend = 2
-        elif current_price > fib_50:
-            fib_trend = 1
-        elif current_price > fib_382:
-            fib_trend = 0
-        else:
-            fib_trend = -1
-    except:
-        fib_trend = 0
-
-    # Z-score weight
-    if z_score < -2: z_weight = 2
-    elif z_score < -1: z_weight = 1
-    elif z_score > 2: z_weight = -2
-    elif z_score > 1: z_weight = -1
-    else: z_weight = 0
-
-    # RSI weight
-    if rsi < 30: rsi_weight = 1
-    elif rsi > 70: rsi_weight = -1
-    else: rsi_weight = 0
-
-    # Options weight
-    try:
-        opt_chain = yf.Ticker(ticker)
-        if opt_chain.options:
-            exp_date = opt_chain.options[0]
-            chain = opt_chain.option_chain(exp_date)
-            call_oi = chain.calls['openInterest'].sum()
-            put_oi = chain.puts['openInterest'].sum()
-            if call_oi > put_oi * 1.2: opt_weight = 1
-            elif put_oi > call_oi * 1.2: opt_weight = -1
-            else: opt_weight = 0
-        else:
-            opt_weight = 0
-    except:
-        opt_weight = 0
-
-    total_score = z_weight + rsi_weight + fib_trend + opt_weight
-    if total_score >= 3: recommendation = "🟢 Strong Buy"
-    elif total_score == 2: recommendation = "🟢 Buy"
-    elif total_score in [0,1]: recommendation = "🟡 Hold"
-    else: recommendation = "🔴 Sell"
-
-    recommendations.append({
-        'Ticker': ticker,
-        'Z-score': round(z_score,2),
-        'RSI': round(rsi,2),
-        'Fib Trend': fib_trend,
-        'Options Sentiment': opt_weight,
-        'Combined Score': total_score,
-        'Recommendation': recommendation
-    })
-
-rec_df = pd.DataFrame(recommendations)
-st.dataframe(rec_df, use_container_width=True)
 
 # ======================
 # Options Education Section
