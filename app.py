@@ -293,83 +293,24 @@ if fib_ticker:
         st.error(f"Error: {e}")
 
 # =========================
-# Options Analysis
+# Options Analysis + Payoff + Recommendation
 # =========================
-st.subheader("📊 Options Indicators")
-opt_ticker = st.text_input("Ticker for options analysis", value="AAPL", key="opt_ticker")
+import streamlit as st
+import yfinance as yf
+import numpy as np
+import plotly.graph_objects as go
 
-if opt_ticker:
-    try:
-        opt_chain = yf.Ticker(opt_ticker)
-        if not opt_chain.options:
-            st.info("No options available for this ticker.")
-        else:
-            exp_date = st.selectbox("Select expiration date", options=opt_chain.options, key="opt_exp_date")
-            chain = opt_chain.option_chain(exp_date)
-            calls = chain.calls
-            puts = chain.puts
+st.subheader("📊 Options Analysis & Payoff Simulator")
 
-            st.write("Top 5 Call Options by Volume")
-            st.dataframe(calls.sort_values("volume", ascending=False).head(5))
-            st.write("Top 5 Put Options by Volume")
-            st.dataframe(puts.sort_values("volume", ascending=False).head(5))
+# -----------------------------
+# Ticker Input
+# -----------------------------
+ticker = st.text_input("Enter Ticker", value="AAPL", key="opt_ticker_main")
+use_live_price = st.checkbox("Auto-fetch current price", value=True, key="opt_use_live_main")
 
-            call_oi = calls['openInterest'].sum()
-            put_oi = puts['openInterest'].sum()
-            if call_oi > put_oi * 1.2:
-                st.success("Market Bias: Bullish (Calls dominate Open Interest)")
-                opt_weight = 1
-            elif put_oi > call_oi * 1.2:
-                st.error("Market Bias: Bearish (Puts dominate Open Interest)")
-                opt_weight = -1
-            else:
-                st.info("Market Bias: Neutral")
-                opt_weight = 0
-
-            avg_call_premium = calls['lastPrice'].mean()
-            st.markdown(f"💡 Covered Call Tip: Avg Call Premium = ${round(avg_call_premium,2)}")
-
-    except Exception as e:
-        st.error(f"Error fetching options: {e}")
-
-
-# ======================
-# Options Education Section
-# ======================
-st.subheader("📘 Options Basics & Explanation")
-st.markdown("""
-**Options come in two main types:**
-
-- **Call Option** → Right (not obligation) to **BUY** a stock at strike price before expiration.  
-  ✅ Buy Calls if you think stock will **go up**.  
-  ✅ Example: Buy Call at $50. If stock rises to $70 → profit.
-
-- **Put Option** → Right (not obligation) to **SELL** a stock at strike price before expiration.  
-  ✅ Buy Puts if you think stock will **go down**.  
-  ✅ Example: Buy Put at $50. If stock falls to $30 → profit.
-
----
-
-### 💡 Quick Tips:
-- **Calls = Bullish bets**  
-- **Puts = Bearish bets**  
-- **Selling Covered Calls** → Collect premium but risk losing shares if stock rallies past strike.  
-- **Selling Cash-Secured Puts** → Collect premium but must buy shares if stock falls below strike.  
-
-👉 Options are used for **hedging, speculation, and income strategies**.
-""")
-
-# =========================
-# Options Payoff Simulator
-# =========================
-st.subheader("🎓 Options Education & Payoff Simulator")
-
-colA, colB = st.columns([1,1])
-with colA:
-    edu_ticker = st.text_input("Ticker for payoff simulation", value="AAPL", key="edu_ticker2")
-with colB:
-    use_live_price = st.checkbox("Auto-fetch current price", value=True, key="edu_use_live2")
-
+# -----------------------------
+# Helper: Current Price
+# -----------------------------
 def get_current_price(ticker: str, fallback: float = 100.0):
     try:
         h = yf.Ticker(ticker).history(period="5d")
@@ -379,8 +320,46 @@ def get_current_price(ticker: str, fallback: float = 100.0):
         pass
     return fallback
 
-S0 = get_current_price(edu_ticker) if use_live_price else 100.0
-st.markdown(f"**Seed Price (S₀)**: `{round(S0,2)}` — baseline for payoff chart")
+S0 = get_current_price(ticker) if use_live_price else 100.0
+st.markdown(f"**Current Price (S₀):** `{round(S0,2)}`")
+
+# -----------------------------
+# Options Chain
+# -----------------------------
+try:
+    opt_chain = yf.Ticker(ticker)
+    if not opt_chain.options:
+        st.info("No options available for this ticker.")
+        calls, puts = None, None
+    else:
+        exp_date = st.selectbox("Select expiration date", options=opt_chain.options, key="exp_date")
+        chain = opt_chain.option_chain(exp_date)
+        calls, puts = chain.calls, chain.puts
+
+        st.write("Top 5 Call Options by Volume")
+        st.dataframe(calls.sort_values("volume", ascending=False).head(5))
+        st.write("Top 5 Put Options by Volume")
+        st.dataframe(puts.sort_values("volume", ascending=False).head(5))
+
+        # Market bias
+        call_oi = calls['openInterest'].sum()
+        put_oi = puts['openInterest'].sum()
+        if call_oi > put_oi * 1.2:
+            st.success("Market Bias: Bullish")
+            opt_weight = 1
+        elif put_oi > call_oi * 1.2:
+            st.error("Market Bias: Bearish")
+            opt_weight = -1
+        else:
+            st.info("Market Bias: Neutral")
+            opt_weight = 0
+
+        avg_call_premium = calls['lastPrice'].mean()
+        st.markdown(f"💡 Avg Call Premium: ${round(avg_call_premium,2)}")
+
+except Exception as e:
+    st.error(f"Error fetching options: {e}")
+    calls, puts, opt_weight = None, None, 0
 
 # -----------------------------
 # Strategy Selection
@@ -388,81 +367,64 @@ st.markdown(f"**Seed Price (S₀)**: `{round(S0,2)}` — baseline for payoff cha
 strategy = st.selectbox(
     "Choose a strategy",
     ["Long Call", "Long Put", "Covered Call", "Cash-Secured Put", "Bull Call Spread"],
-    key="edu_strategy2"
+    key="strategy_main"
 )
 
+# Price grid
 rng = st.slider(
     "Underlying price range at expiration (Sₜ)",
     min_value=max(1,int(S0*0.2)),
     max_value=int(S0*2.0),
     value=(int(S0*0.6), int(S0*1.4)),
     step=1,
-    key="edu_range2"
+    key="range_main"
 )
 S_grid = np.linspace(rng[0], rng[1], 300)
 
-# -----------------------------
 # Inputs
-# -----------------------------
-K = st.number_input("Strike Price (K)", value=int(S0), step=1, key="edu_strike")
-premium = st.number_input("Option Premium ($)", value=5.0, step=0.1, key="edu_premium")
+K = st.number_input("Strike Price (K)", value=int(S0), step=1, key="strike_main")
+premium = st.number_input("Option Premium ($)", value=5.0, step=0.1, key="premium_main")
 K2 = None
-
 if strategy == "Bull Call Spread":
-    K2 = st.number_input("Second Strike Price (K2)", value=int(S0+10), step=1, key="edu_strike2")
+    K2 = st.number_input("Second Strike Price (K2)", value=int(S0+10), step=1, key="strike2_main")
 
 # -----------------------------
-# Payoff Logic
+# Payoff Calculation
 # -----------------------------
 if strategy == "Long Call":
     payoff = np.maximum(S_grid - K,0) - premium
     breakeven = K + premium
     max_loss, max_profit = -premium, "Unlimited"
-
 elif strategy == "Long Put":
     payoff = np.maximum(K - S_grid,0) - premium
     breakeven = K - premium
-    max_loss, max_profit = -premium, (K - premium)
-
+    max_loss, max_profit = -premium, K - premium
 elif strategy == "Covered Call":
     payoff = (S_grid - S0) + premium - np.maximum(S_grid - K,0)
     breakeven = S0 - premium
     max_loss, max_profit = -(S0 - premium), (K - S0 + premium)
-
 elif strategy == "Cash-Secured Put":
     payoff = premium - np.maximum(K - S_grid,0)
     breakeven = K - premium
     max_loss, max_profit = -(K - premium), premium
-
 elif strategy == "Bull Call Spread":
     payoff = np.maximum(S_grid - K,0) - np.maximum(S_grid - K2,0) - premium
     breakeven = K + premium
-    max_loss = -premium
-    max_profit = (K2 - K - premium)
-
+    max_loss, max_profit = -premium, K2 - K - premium
 else:
     payoff = np.zeros_like(S_grid)
     breakeven, max_loss, max_profit = None, None, None
 
 # -----------------------------
-# Plot Payoff Chart
+# Plot Payoff
 # -----------------------------
-fig_payoff = go.Figure()
-fig_payoff.add_trace(go.Scatter(x=S_grid, y=payoff, mode='lines', name="Payoff", line=dict(color="royalblue")))
-
-# Breakeven marker
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=S_grid, y=payoff, mode='lines', name="Payoff", line=dict(color="royalblue")))
 if breakeven:
-    fig_payoff.add_vline(x=breakeven, line=dict(dash="dot", color="green"))
-    fig_payoff.add_annotation(x=breakeven, y=0, text="Breakeven", showarrow=True, arrowhead=2)
-
-fig_payoff.update_layout(
-    title=f"{strategy} Payoff at Expiration",
-    xaxis_title="Underlying Price Sₜ",
-    yaxis_title="Profit / Loss",
-    showlegend=False,
-    height=500
-)
-st.plotly_chart(fig_payoff, use_container_width=True)
+    fig.add_vline(x=breakeven, line=dict(dash="dot", color="green"))
+    fig.add_annotation(x=breakeven, y=0, text="Breakeven", showarrow=True, arrowhead=2)
+fig.update_layout(title=f"{strategy} Payoff at Expiration", xaxis_title="Underlying Price Sₜ", yaxis_title="Profit / Loss", showlegend=False, height=500)
+st.plotly_chart(fig, use_container_width=True)
 
 # -----------------------------
 # Insights
@@ -471,39 +433,20 @@ st.markdown("### 📊 Strategy Insights")
 st.write(f"**Breakeven Price:** {breakeven}")
 st.write(f"**Max Profit:** {max_profit}")
 st.write(f"**Max Loss:** {max_loss}")
+
 # -----------------------------
-# Recommendation Logic
+# Recommendation
 # -----------------------------
 recommendation = ""
 if strategy == "Long Call":
-    if S0 < K:
-        recommendation = "🟢 Consider Buying Call (expect price rise above strike)"
-    else:
-        recommendation = "⚠️ Call is in-the-money; check premium before buying"
-
+    recommendation = "🟢 Buy Call" if S0 < K else "⚠️ Call is in-the-money; check premium"
 elif strategy == "Long Put":
-    if S0 > K:
-        recommendation = "🟢 Consider Buying Put (expect price drop below strike)"
-    else:
-        recommendation = "⚠️ Put is in-the-money; check premium before buying"
-
+    recommendation = "🟢 Buy Put" if S0 > K else "⚠️ Put is in-the-money; check premium"
 elif strategy == "Covered Call":
-    if S0 >= K:
-        recommendation = "🟡 Covered Call: stock may get called away, collect premium"
-    else:
-        recommendation = "🟢 Covered Call: collect premium with moderate upside"
-
+    recommendation = "🟡 Covered Call: collect premium, limited upside"
 elif strategy == "Cash-Secured Put":
-    if S0 > K:
-        recommendation = "🟢 Sell Put to potentially acquire stock at discount"
-    else:
-        recommendation = "⚠️ Strike below current price; consider risk"
-
+    recommendation = "🟢 Sell Put to potentially acquire stock at discount"
 elif strategy == "Bull Call Spread":
-    if S0 < K:
-        recommendation = "🟢 Bull Call Spread: moderate bullish view"
-    else:
-        recommendation = "🟡 Spread might be slightly in-the-money; limited upside"
+    recommendation = "🟢 Bull Call Spread: moderate bullish view" if S0 < K else "🟡 Spread may have limited upside"
 
 st.markdown(f"### 💡 Recommendation: {recommendation}")
-
