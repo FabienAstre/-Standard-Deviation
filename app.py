@@ -355,6 +355,85 @@ except Exception as e:
     st.warning(f"No options available or error: {e}")
 
 # =========================
+# Options Analysis with Greeks
+# =========================
+st.subheader("📊 Options Indicators & Greeks")
+opt_ticker = st.text_input("Ticker for options analysis", value="AAPL", key="opt_ticker")
+
+if opt_ticker:
+    try:
+        opt_chain = yf.Ticker(opt_ticker)
+        if not opt_chain.options:
+            st.info("No options available for this ticker.")
+        else:
+            # Select expiration
+            exp_date = st.selectbox("Select expiration date", options=opt_chain.options, key="opt_exp_date")
+            chain = opt_chain.option_chain(exp_date)
+            calls = chain.calls
+            puts = chain.puts
+
+            # Display top 5 by volume
+            st.markdown("### 🔹 Top 5 Call Options by Volume")
+            st.dataframe(calls.sort_values("volume", ascending=False).head(5))
+            st.markdown("### 🔹 Top 5 Put Options by Volume")
+            st.dataframe(puts.sort_values("volume", ascending=False).head(5))
+
+            # Calculate Greeks (approximate using Black-Scholes if needed)
+            # Using yfinance, we usually have: impliedVolatility, delta, gamma, theta, vega, rho
+            # If missing, we'll set as None
+            def extract_greeks(df):
+                greeks_list = []
+                for _, row in df.head(5).iterrows():
+                    greeks_list.append({
+                        'Contract': row['contractSymbol'],
+                        'Strike': row['strike'],
+                        'Last Price': row['lastPrice'],
+                        'Bid': row['bid'],
+                        'Ask': row['ask'],
+                        'Volume': row['volume'],
+                        'Open Interest': row['openInterest'],
+                        'Implied Volatility': row.get('impliedVolatility', None),
+                        'Delta': row.get('delta', None),
+                        'Gamma': row.get('gamma', None),
+                        'Theta': row.get('theta', None),
+                        'Vega': row.get('vega', None),
+                        'Rho': row.get('rho', None),
+                    })
+                return pd.DataFrame(greeks_list)
+
+            st.markdown("### 📈 Top Calls with Greeks")
+            calls_greeks = extract_greeks(calls)
+            st.dataframe(calls_greeks)
+
+            st.markdown("### 📉 Top Puts with Greeks")
+            puts_greeks = extract_greeks(puts)
+            st.dataframe(puts_greeks)
+
+            # Explain Greeks
+            st.markdown("""
+### 💡 Greek Explanation
+- **Delta (Δ):** How much the option price moves for $1 move in stock.  
+- **Gamma (Γ):** How much Delta changes if stock moves $1.  
+- **Theta (Θ):** Time decay of the option per day. Negative for buyers.  
+- **Vega (ν):** Sensitivity to implied volatility. Higher IV → option price rises.  
+- **Rho (ρ):** Sensitivity to interest rate changes.
+""")
+
+            # Market bias
+            call_oi = calls['openInterest'].sum()
+            put_oi = puts['openInterest'].sum()
+            if call_oi > put_oi * 1.2:
+                st.success("Market Bias: Bullish (Calls dominate Open Interest)")
+            elif put_oi > call_oi * 1.2:
+                st.error("Market Bias: Bearish (Puts dominate Open Interest)")
+            else:
+                st.info("Market Bias: Neutral")
+
+    except Exception as e:
+        st.error(f"Error fetching options: {e}")
+
+
+# =========================
 # Options Education
 # =========================
 st.subheader("📘 Options Basics & Explanation")
