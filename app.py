@@ -1,305 +1,419 @@
+# app.py
 import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-from datetime import datetime
 
-st.set_page_config(page_title="Stock & Crypto Screener + Combined Dashboard", layout="wide")
+st.set_page_config(page_title="Stock & Crypto Screener", layout="wide")
+st.title("📉 Stock & Crypto Screener + Fibonacci & Options Analysis")
+st.write("""
+Analyze assets based on **Z-score**, **RSI**, **Moving Averages**, **Fibonacci retracement**, 
+and **Options sentiment** with actionable guidance.
+""")
 
-# ==================
-# Helper functions
-# ==================
-@st.cache_data
-def fetch_batch_history(tickers, period, interval="1d"):
-    """Fetches historical data for multiple tickers using yfinance.download."""
-    try:
-        data = yf.download(tickers=tickers, period=period, interval=interval, group_by='ticker', threads=True, progress=False)
-        return data
-    except Exception as e:
-        st.error(f"Error fetching history: {e}")
-        return None
-
-@st.cache_data
-def fetch_option_sentiment(ticker: str):
-    try:
-        t = yf.Ticker(ticker)
-        if not t.options:
-            return None
-        exp = t.options[0]
-        chain = t.option_chain(exp)
-        call_oi = chain.calls['openInterest'].sum()
-        put_oi = chain.puts['openInterest'].sum()
-        if call_oi > put_oi * 1.2:
-            return 1
-        elif put_oi > call_oi * 1.2:
-            return -1
-        else:
-            return 0
-    except Exception:
-        return None
-
-def compute_rsi(series: pd.Series, window: int = 14) -> float:
-    delta = series.diff()
-    up = delta.clip(lower=0)
-    down = -1 * delta.clip(upper=0)
-    ma_up = up.ewm(alpha=1/window, adjust=False).mean()
-    ma_down = down.ewm(alpha=1/window, adjust=False).mean()
-    rs = ma_up / ma_down
-    rsi = 100 - (100 / (1 + rs))
-    return rsi.iloc[-1]
-
-def compute_zscore(series: pd.Series, window: int = 30) -> float:
-    # z-score of the last price relative to rolling mean/std over window
-    if len(series) < window:
-        return 0.0
-    rolling_mean = series.rolling(window).mean().iloc[-1]
-    rolling_std = series.rolling(window).std().iloc[-1]
-    if rolling_std == 0 or np.isnan(rolling_std):
-        return 0.0
-    z = (series.iloc[-1] - rolling_mean) / rolling_std
-    return float(z)
-
-def compute_fib_levels(low, high):
-    levels = {
-        'fib_0': low,
-        'fib_382': low + 0.382 * (high - low),
-        'fib_50': low + 0.5 * (high - low),
-        'fib_618': low + 0.618 * (high - low),
-        'fib_100': high
-    }
-    return levels
-
-def build_candlestick_with_rsi(df, ticker, fib_levels=None):
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.02)
-    fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name=f'{ticker}'), row=1, col=1)
-
-    # Add Fibonacci levels
-    if fib_levels is not None:
-        for name, level in fib_levels.items():
-            fig.add_hline(y=level, line_dash='dash', annotation_text=name, row=1, col=1)
-
-    # RSI
-    rsi_series = compute_rsi(df['Close'].copy(), window=14)
-    # For plotting RSI, compute full RSI series
-    delta = df['Close'].diff()
-    up = delta.clip(lower=0)
-    down = -1 * delta.clip(upper=0)
-    ma_up = up.ewm(alpha=1/14, adjust=False).mean()
-    ma_down = down.ewm(alpha=1/14, adjust=False).mean()
-    rs = ma_up / ma_down
-    rsi_full = 100 - (100 / (1 + rs))
-    fig.add_trace(go.Scatter(x=df.index, y=rsi_full, name='RSI'), row=2, col=1)
-    fig.update_yaxes(title_text='Price', row=1, col=1)
-    fig.update_yaxes(title_text='RSI', row=2, col=1)
-    fig.update_layout(height=500, showlegend=False, title_text=f"{ticker} Price & RSI")
-    return fig
-
-# ==================
+# =========================
 # Sidebar / Inputs
-# ==================
-st.sidebar.title("Settings")
-input_mode = st.sidebar.radio("Input tickers by:", ['Text input', 'Upload CSV'])
-period = st.sidebar.selectbox("History period:", ['1mo', '3mo', '6mo', '1y', '2y', '5y'], index=2)
-interval = st.sidebar.selectbox("Interval:", ['1d', '1wk', '1mo'], index=0)
-min_volume = st.sidebar.number_input("Minimum average volume (last period):", value=0, step=1000)
+# =========================
+tickers_input = st.text_input(
+    "Enter tickers (comma-separated, e.g., AAPL, MSFT, BTC-USD)", 
+    value="AAPL, MSFT, BTC-USD"
+)
+period = st.selectbox(
+    "Select price history period for analysis", 
+    ['1mo', '3mo', '6mo', '1y', '2y', '5y']
+)
+show_only_undervalued = st.checkbox(
+    "Show only Undervalued Assets (Z-score < -1)", 
+    value=False
+)
+tickers = [t.strip().upper() for t in tickers_input.split(",") if t.strip()]
 
-if input_mode == 'Text input':
-    tickers_raw = st.sidebar.text_area("Tickers (comma separated)", value="AAPL,MSFT,TSLA,NVDA,GOOG")
-    tickers = [t.strip().upper() for t in tickers_raw.split(',') if t.strip()]
-else:
-    uploaded = st.sidebar.file_uploader("Upload CSV with a 'Ticker' column", type=['csv'])
-    tickers = []
-    if uploaded is not None:
-        try:
-            df_in = pd.read_csv(uploaded)
-            if 'Ticker' in df_in.columns:
-                tickers = [str(t).strip().upper() for t in df_in['Ticker'].unique()]
-            else:
-                st.sidebar.error("CSV must contain a 'Ticker' column")
-        except Exception as e:
-            st.sidebar.error(f"Error reading CSV: {e}")
+# =========================
+# Helper Functions
+# =========================
+def calculate_rsi(prices, window=14):
+    delta = prices.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
 
-st.sidebar.markdown("---")
-st.sidebar.write("This app fetches data via yfinance. For large lists, fetching may take time.")
-
-# ==================
-# Fetch data
-# ==================
-if not tickers:
-    st.info("Enter at least one ticker to analyze.")
-    st.stop()
-
-with st.spinner("Fetching historical data..."):
-    raw_hist = fetch_batch_history(tickers, period=period, interval=interval)
-
-# raw_hist format: if multiple tickers, columns are multiindex (ticker, feature)
-
-# Prepare results list
-results = []
-
-for ticker in tickers:
+def analyze_asset(ticker, period='6mo'):
     try:
-        if len(tickers) == 1:
-            df = raw_hist.copy()
-        else:
-            if ticker in raw_hist.columns.levels[0]:
-                df = raw_hist[ticker].dropna()
-            else:
-                st.warning(f"No history found for {ticker}")
-                continue
+        data = yf.Ticker(ticker).history(period=period)
+        if data.empty:
+            return None
+    except:
+        return None
 
-        if df.empty:
-            st.warning(f"No data for {ticker}")
+    close_prices = data['Close']
+    mean_price = close_prices.mean()
+    std_dev = close_prices.std()
+    current_price = close_prices[-1]
+    z_score = (current_price - mean_price) / std_dev
+    rsi = calculate_rsi(close_prices).iloc[-1]
+
+    if z_score < -2:
+        signal = "🔻 Strongly Undervalued"
+    elif z_score < -1:
+        signal = "⚠️ Possibly Undervalued"
+    elif z_score > 2:
+        signal = "📈 Strongly Overvalued"
+    elif z_score > 1:
+        signal = "⚠️ Possibly Overvalued"
+    else:
+        signal = "✅ Normal Range"
+
+    info = yf.Ticker(ticker).info
+    pe = info.get("trailingPE", None)
+    pb = info.get("priceToBook", None)
+    div_yield = info.get("dividendYield", None)
+    market_cap = info.get("marketCap", None)
+
+    return {
+        'ticker': ticker,
+        'current_price': current_price,
+        'mean_price': mean_price,
+        'std_dev': std_dev,
+        'z_score': z_score,
+        'rsi': rsi,
+        'signal': signal,
+        'prices': close_prices,
+        'data': data,
+        'info': {'P/E': pe, 'P/B': pb, 'Div Yield': div_yield, 'Market Cap': market_cap}
+    }
+
+# =========================
+# Analyze All Tickers
+# =========================
+results = []
+for ticker in tickers:
+    r = analyze_asset(ticker, period)
+    if r:
+        if show_only_undervalued and r['z_score'] > -1:
             continue
+        results.append(r)
+    else:
+        st.warning(f"No data available for {ticker}")
 
-        close = df['Close']
-        current_price = float(close.iloc[-1])
-        avg_vol = None
-        if 'Volume' in df.columns:
-            avg_vol = int(df['Volume'].tail(30).mean())
-            if avg_vol < min_volume:
-                st.info(f"Skipping {ticker} due to low average volume ({avg_vol})")
-                continue
+# =========================
+# Screener Table
+# =========================
+if results:
+    df = pd.DataFrame([{
+        'Ticker': r['ticker'],
+        'Current Price': round(r['current_price'], 2),
+        'Mean Price': round(r['mean_price'], 2),
+        'Std Dev': round(r['std_dev'], 2),
+        'Z-Score': round(r['z_score'], 2),
+        'RSI': round(r['rsi'], 2),
+        'Signal': r['signal'],
+        'P/E': r['info']['P/E'],
+        'P/B': r['info']['P/B'],
+        'Div Yield': r['info']['Div Yield'],
+        'Market Cap': r['info']['Market Cap']
+    } for r in results])
+    
+    st.subheader("📑 Screener Table")
+    st.dataframe(df, use_container_width=True)
+    st.download_button("Download CSV", data=df.to_csv(index=False), file_name="screener_results.csv")
 
-        z = compute_zscore(close, window=min(60, max(10, int(len(close)/2))))
-        rsi_val = compute_rsi(close, window=14)
+# =========================
+# Candlestick Charts + Indicators
+# =========================
+st.subheader("📊 Price Charts & Indicators")
+for r in results:
+    with st.expander(f"{r['ticker']} Chart"):
+        prices = r['prices']
+        ma50 = prices.rolling(50).mean()
+        ma200 = prices.rolling(200).mean()
+        hist_data = r['data']
+        
+        fig = go.Figure()
+        fig.add_trace(go.Candlestick(
+            x=hist_data.index,
+            open=hist_data['Open'],
+            high=hist_data['High'],
+            low=hist_data['Low'],
+            close=hist_data['Close'],
+            name="Candlestick"
+        ))
+        fig.add_trace(go.Scatter(x=hist_data.index, y=ma50, mode="lines", name="MA 50", line=dict(color="blue")))
+        fig.add_trace(go.Scatter(x=hist_data.index, y=ma200, mode="lines", name="MA 200", line=dict(color="orange")))
+        
+        fig.add_hline(y=r['mean_price'], line_dash="dash", line_color="green", annotation_text="Mean")
+        fig.add_hline(y=r['mean_price'] + r['std_dev'], line_dash="dash", line_color="orange", annotation_text="+1 STD")
+        fig.add_hline(y=r['mean_price'] - r['std_dev'], line_dash="dash", line_color="orange", annotation_text="-1 STD")
+        fig.add_hline(y=r['mean_price'] + 2*r['std_dev'], line_dash="dash", line_color="red", annotation_text="+2 STD")
+        fig.add_hline(y=r['mean_price'] - 2*r['std_dev'], line_dash="dash", line_color="red", annotation_text="-2 STD")
 
-        high_price = df['High'].max()
-        low_price = df['Low'].min()
-        fib = compute_fib_levels(low_price, high_price)
+        fig.update_layout(title=f"{r['ticker']} Candlestick Chart", xaxis_rangeslider_visible=False)
+        st.plotly_chart(fig, use_container_width=True)
+        st.markdown("""
+        **Explanation:**  
+        - **MA50 / MA200**: Trend direction (bullish if MA50 > MA200)  
+        - **Std Dev Bands**: Show volatility and potential support/resistance  
+        - **Candlestick**: Short-term price patterns
+        """)
 
-        # Fib trend scoring
-        if current_price > fib['fib_618']:
+# =========================
+# Fibonacci Levels + Trend Guidance
+# =========================
+st.subheader("📏 Fibonacci Levels & Trend Guidance")
+fib_ticker = st.text_input("Ticker for Fibonacci analysis", value="AAPL", key="fib_ticker")
+fib_period = st.selectbox("Period for Fibonacci", ['1mo','3mo','6mo','1y','2y','5y'], index=2, key="fib_period")
+
+if fib_ticker:
+    try:
+        fib_data = yf.Ticker(fib_ticker).history(period=fib_period)
+        if not fib_data.empty:
+            high_price = fib_data['High'].max()
+            low_price = fib_data['Low'].min()
+            current_price = fib_data['Close'][-1]
+
+            levels = {
+                "0.0% (Low)": low_price,
+                "23.6%": low_price + 0.236*(high_price-low_price),
+                "38.2%": low_price + 0.382*(high_price-low_price),
+                "50.0%": low_price + 0.5*(high_price-low_price),
+                "61.8%": low_price + 0.618*(high_price-low_price),
+                "100% (High)": high_price
+            }
+
+            fib_df = pd.DataFrame(levels.items(), columns=["Level", "Price"])
+            st.write(f"**{fib_ticker.upper()}** — High: {round(high_price,2)}, Low: {round(low_price,2)}, Current: {round(current_price,2)}")
+            st.table(fib_df)
+
+            fig_fib = go.Figure()
+            fig_fib.add_trace(go.Scatter(x=fib_data.index, y=fib_data['Close'], mode="lines", name="Close Price"))
+            for lvl_name, price in levels.items():
+                fig_fib.add_hline(y=price, line_dash="dash", line_color="orange", annotation_text=lvl_name, annotation_position="top left")
+            fig_fib.update_layout(title=f"{fib_ticker.upper()} Fibonacci Levels", xaxis_rangeslider_visible=False)
+            st.plotly_chart(fig_fib, use_container_width=True)
+
+            # Trend guidance
+            fib_50 = levels["50.0%"]
+            fib_618 = levels["61.8%"]
+            fib_382 = levels["38.2%"]
+            if current_price > fib_618:
+                trend = "🔥 Strong Uptrend"
+                guidance = "Price above 61.8%. Consider bullish continuation."
+            elif current_price > fib_50:
+                trend = "📈 Moderate Uptrend"
+                guidance = "Price between 50%-61.8%. Support may hold near 50% retracement."
+            elif current_price > fib_382:
+                trend = "⚖️ Neutral / Consolidation"
+                guidance = "Price between 38.2%-50%. Watch for breakout."
+            else:
+                trend = "🔻 Downtrend"
+                guidance = "Price below 38.2%. Be cautious with longs."
+
+            st.markdown(f"**Trend:** {trend}")
+            st.markdown(f"**Guidance:** {guidance}")
+        else:
+            st.warning("No data for Fibonacci.")
+    except Exception as e:
+        st.error(f"Error: {e}")
+
+# =========================
+# Options Analysis
+# =========================
+st.subheader("📊 Options Indicators")
+opt_ticker = st.text_input("Ticker for options analysis", value="AAPL", key="opt_ticker")
+
+if opt_ticker:
+    try:
+        opt_chain = yf.Ticker(opt_ticker)
+        if not opt_chain.options:
+            st.info("No options available for this ticker.")
+        else:
+            exp_date = st.selectbox("Select expiration date", options=opt_chain.options, key="opt_exp_date")
+            chain = opt_chain.option_chain(exp_date)
+            calls = chain.calls
+            puts = chain.puts
+
+            st.write("Top 5 Call Options by Volume")
+            st.dataframe(calls.sort_values("volume", ascending=False).head(5))
+            st.write("Top 5 Put Options by Volume")
+            st.dataframe(puts.sort_values("volume", ascending=False).head(5))
+
+            call_oi = calls['openInterest'].sum()
+            put_oi = puts['openInterest'].sum()
+            if call_oi > put_oi * 1.2:
+                st.success("Market Bias: Bullish (Calls dominate Open Interest)")
+                opt_weight = 1
+            elif put_oi > call_oi * 1.2:
+                st.error("Market Bias: Bearish (Puts dominate Open Interest)")
+                opt_weight = -1
+            else:
+                st.info("Market Bias: Neutral")
+                opt_weight = 0
+
+            avg_call_premium = calls['lastPrice'].mean()
+            st.markdown(f"💡 Covered Call Tip: Avg Call Premium = ${round(avg_call_premium,2)}")
+
+    except Exception as e:
+        st.error(f"Error fetching options: {e}")
+
+# =========================
+# Combined Recommendation Dashboard
+# =========================
+st.subheader("📊 Combined Trend & Recommendation Dashboard")
+recommendations = []
+
+for r in results:
+    ticker = r['ticker']
+    current_price = r['current_price']
+    z_score = r['z_score']
+    rsi = r['rsi']
+
+    # Fibonacci trend
+    try:
+        fib_data = yf.Ticker(ticker).history(period=period)
+        high_price = fib_data['High'].max()
+        low_price = fib_data['Low'].min()
+        fib_50 = low_price + 0.5*(high_price-low_price)
+        fib_618 = low_price + 0.618*(high_price-low_price)
+        fib_382 = low_price + 0.382*(high_price-low_price)
+        if current_price > fib_618:
             fib_trend = 2
-        elif current_price > fib['fib_50']:
+        elif current_price > fib_50:
             fib_trend = 1
-        elif current_price > fib['fib_382']:
+        elif current_price > fib_382:
             fib_trend = 0
         else:
             fib_trend = -1
+    except:
+        fib_trend = 0
 
-        # Z-score weight
-        if z < -2:
-            z_weight = 2
-        elif z < -1:
-            z_weight = 1
-        elif z > 2:
-            z_weight = -2
-        elif z > 1:
-            z_weight = -1
+    # Z-score weight
+    if z_score < -2: z_weight = 2
+    elif z_score < -1: z_weight = 1
+    elif z_score > 2: z_weight = -2
+    elif z_score > 1: z_weight = -1
+    else: z_weight = 0
+
+    # RSI weight
+    if rsi < 30: rsi_weight = 1
+    elif rsi > 70: rsi_weight = -1
+    else: rsi_weight = 0
+
+    # Options weight
+    try:
+        opt_chain = yf.Ticker(ticker)
+        if opt_chain.options:
+            exp_date = opt_chain.options[0]
+            chain = opt_chain.option_chain(exp_date)
+            call_oi = chain.calls['openInterest'].sum()
+            put_oi = chain.puts['openInterest'].sum()
+            if call_oi > put_oi * 1.2: opt_weight = 1
+            elif put_oi > call_oi * 1.2: opt_weight = -1
+            else: opt_weight = 0
         else:
-            z_weight = 0
+            opt_weight = 0
+    except:
+        opt_weight = 0
 
-        # RSI weight
-        if rsi_val < 30:
-            rsi_weight = 1
-        elif rsi_val > 70:
-            rsi_weight = -1
-        else:
-            rsi_weight = 0
+    total_score = z_weight + rsi_weight + fib_trend + opt_weight
+    if total_score >= 3: recommendation = "🟢 Strong Buy"
+    elif total_score == 2: recommendation = "🟢 Buy"
+    elif total_score in [0,1]: recommendation = "🟡 Hold"
+    else: recommendation = "🔴 Sell"
 
-        opt_sent = fetch_option_sentiment(ticker)
-        opt_display = opt_sent if opt_sent is not None else 'N/A'
-        opt_weight = opt_sent if opt_sent is not None else 0
-
-        total_score = z_weight + rsi_weight + fib_trend + opt_weight
-
-        if total_score >= 3:
-            rec = '🟢 Strong Buy'
-        elif total_score == 2:
-            rec = '🟢 Buy'
-        elif total_score in [0, 1]:
-            rec = '🟡 Hold'
-        elif total_score <= -3:
-            rec = '🔴 Strong Sell'
-        else:
-            rec = '🔴 Sell'
-
-        results.append({
-            'ticker': ticker,
-            'current_price': current_price,
-            'avg_volume': avg_vol,
-            'z_score': round(z, 3),
-            'rsi': round(rsi_val, 2),
-            'fib_trend': fib_trend,
-            'fib_levels': fib,
-            'opt_sentiment': opt_display,
-            'opt_weight': opt_weight,
-            'total_score': total_score,
-            'recommendation': rec,
-            'history_df': df
-        })
-
-    except Exception as e:
-        st.error(f"Error processing {ticker}: {e}")
-
-# ==================
-# Combined Recommendation Dashboard
-# ==================
-st.header("📊 Combined Trend & Recommendation Dashboard")
-recommendations = []
-for r in results:
     recommendations.append({
-        'Ticker': r['ticker'],
-        'Price': r['current_price'],
-        'Avg Volume': r['avg_volume'],
-        'Z-score': r['z_score'],
-        'RSI': r['rsi'],
-        'Fib Trend': r['fib_trend'],
-        'Options Sentiment': r['opt_sentiment'],
-        'Combined Score': r['total_score'],
-        'Recommendation': r['recommendation']
+        'Ticker': ticker,
+        'Z-score': round(z_score,2),
+        'RSI': round(rsi,2),
+        'Fib Trend': fib_trend,
+        'Options Sentiment': opt_weight,
+        'Combined Score': total_score,
+        'Recommendation': recommendation
     })
 
 rec_df = pd.DataFrame(recommendations)
+st.dataframe(rec_df, use_container_width=True)
 
-# color function
-def highlight_rec(val):
-    if 'Strong Buy' in val:
-        return 'background-color: #b6f7b6'
-    if val == '🟢 Buy':
-        return 'background-color: #d4fcd4'
-    if val == '🟡 Hold':
-        return 'background-color: #fff8b3'
-    if val == '🔴 Sell':
-        return 'background-color: #fcd4d4'
-    if 'Strong Sell' in val:
-        return 'background-color: #f7b6b6'
-    return ''
+# ======================
+# Options Education Section
+# ======================
+st.subheader("📘 Options Basics & Explanation")
+st.markdown("""
+**Options come in two main types:**
 
-st.dataframe(rec_df.style.applymap(highlight_rec, subset=['Recommendation']), use_container_width=True)
+- **Call Option** → Right (not obligation) to **BUY** a stock at strike price before expiration.  
+  ✅ Buy Calls if you think stock will **go up**.  
+  ✅ Example: Buy Call at $50. If stock rises to $70 → profit.
 
-# Download recommendations
-csv = rec_df.to_csv(index=False)
-st.download_button(label="Download recommendations CSV", data=csv, file_name=f"recommendations_{datetime.now().strftime('%Y%m%d_%H%M')}.csv", mime='text/csv')
+- **Put Option** → Right (not obligation) to **SELL** a stock at strike price before expiration.  
+  ✅ Buy Puts if you think stock will **go down**.  
+  ✅ Example: Buy Put at $50. If stock falls to $30 → profit.
 
-# ==================
-# Detailed per-ticker view
-# ==================
-st.header("🔎 Ticker Details")
-for r in results:
-    ticker = r['ticker']
-    df = r['history_df']
-    fib = r['fib_levels']
-    st.subheader(f"{ticker} — {r['recommendation']} — Price: {r['current_price']}")
-    col1, col2 = st.columns([3,1])
-    with col1:
-        fig = build_candlestick_with_rsi(df, ticker, fib_levels=fib)
-        st.plotly_chart(fig, use_container_width=True)
-    with col2:
-        st.metric(label="Combined Score", value=r['total_score'])
-        st.metric(label="RSI", value=r['rsi'])
-        st.metric(label="Z-score", value=r['z_score'])
-        st.write("**Fibonacci levels**")
-        st.write(pd.Series(fib))
-        st.write("**Options Sentiment**")
-        st.write(r['opt_sentiment'])
+---
 
-# ==================
-# Footer / Notes
-# ==================
-st.write("---")
-st.caption("Signals are algorithmic and for informational purposes only. Not financial advice.")
+### 💡 Quick Tips:
+- **Calls = Bullish bets**  
+- **Puts = Bearish bets**  
+- **Selling Covered Calls** → Collect premium but risk losing shares if stock rallies past strike.  
+- **Selling Cash-Secured Puts** → Collect premium but must buy shares if stock falls below strike.  
 
+👉 Options are used for **hedging, speculation, and income strategies**.
+""")
+
+# =========================
+# Options Payoff Simulator
+# =========================
+st.subheader("🎓 Options Education & Payoff Simulator")
+
+colA, colB = st.columns([1,1])
+with colA:
+    edu_ticker = st.text_input("Ticker for payoff simulation", value="AAPL", key="edu_ticker2")
+with colB:
+    use_live_price = st.checkbox("Auto-fetch current price", value=True, key="edu_use_live2")
+
+def get_current_price(ticker: str, fallback: float = 100.0):
+    try:
+        h = yf.Ticker(ticker).history(period="5d")
+        if not h.empty:
+            return float(h["Close"][-1])
+    except:
+        pass
+    return fallback
+
+S0 = get_current_price(edu_ticker) if use_live_price else 100.0
+st.markdown(f"**Seed Price (S₀)**: `{round(S0,2)}` — baseline for payoff chart")
+
+strategy = st.selectbox(
+    "Choose a strategy",
+    ["Long Call", "Long Put", "Covered Call", "Cash-Secured Put", "Bull Call Spread"],
+    key="edu_strategy2"
+)
+
+rng = st.slider(
+    "Underlying price range at expiration (Sₜ)",
+    min_value=max(1,int(S0*0.2)),
+    max_value=int(S0*2.0),
+    value=(int(S0*0.6), int(S0*1.4)),
+    step=1,
+    key="edu_range2"
+)
+S_grid = np.linspace(rng[0], rng[1], 300)
+
+K = st.number_input("Strike Price (K)", value=int(S0), step=1, key="edu_strike")
+premium = st.number_input("Option Premium ($)", value=5.0, step=0.1, key="edu_premium")
+
+if strategy == "Long Call":
+    payoff = np.maximum(S_grid - K,0) - premium
+elif strategy == "Long Put":
+    payoff = np.maximum(K - S_grid,0) - premium
+else:
+    payoff = np.zeros_like(S_grid)
+
+fig_payoff = go.Figure()
+fig_payoff.add_trace(go.Scatter(x=S_grid, y=payoff, mode='lines', name="Payoff"))
+fig_payoff.update_layout(
+    title=f"{strategy} Payoff at Expiration",
+    xaxis_title="Underlying Price Sₜ",
+    yaxis_title="Profit / Loss"
+)
+st.plotly_chart(fig_payoff, use_container_width=True)
