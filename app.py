@@ -326,33 +326,6 @@ def get_current_price(ticker:str, fallback=100.0):
 S0 = get_current_price(ticker) if use_live_price else 100.0
 st.markdown(f"**Seed Price (S₀): `{round(S0,2)}` — baseline for payoff chart**")
 
-# =========================
-# Fetch Options Chain
-# =========================
-calls, puts = None, None
-market_bias = "Neutral"
-try:
-    opt_chain = yf.Ticker(ticker)
-    if opt_chain.options:
-        exp_date = st.selectbox("Select expiration date", opt_chain.options)
-        chain = opt_chain.option_chain(exp_date)
-        calls = chain.calls
-        puts = chain.puts
-
-        st.subheader("Top 5 Call Options by Volume")
-        st.dataframe(calls.sort_values("volume", ascending=False).head(5))
-        st.subheader("Top 5 Put Options by Volume")
-        st.dataframe(puts.sort_values("volume", ascending=False).head(5))
-
-        call_oi = calls['openInterest'].sum()
-        put_oi = puts['openInterest'].sum()
-        if call_oi > put_oi * 1.2:
-            market_bias = "Bullish"
-        elif put_oi > call_oi * 1.2:
-            market_bias = "Bearish"
-
-except Exception as e:
-    st.warning(f"No options available or error: {e}")
 
 # =========================
 # Options Analysis with Greeks
@@ -547,3 +520,45 @@ elif strategy == "Bull Call Spread":
 st.markdown(f"### Recommendation: {recommendation}")
 st.markdown(f"**Advice:** {advice}")
 st.write(f"**Breakeven:** {breakeven}, **Max Profit:** {max_profit}, **Max Loss:** {max_loss}")
+
+# =========================
+# High-Probability Option Picks
+# =========================
+st.subheader("📈 High-Probability Option Picks")
+
+if calls is not None and puts is not None:
+    # Approximate probability using Delta (calls) as a proxy
+    calls['prob_ITM'] = calls.get('delta', 0.5)  # if delta missing, assume 50%
+    puts['prob_ITM'] = abs(puts.get('delta', -0.5))  # absolute delta for puts
+
+    # Filter for high probability (e.g., delta > 0.7)
+    high_prob_calls = calls[calls['prob_ITM'] >= 0.7].sort_values('prob_ITM', ascending=False)
+    high_prob_puts = puts[puts['prob_ITM'] >= 0.7].sort_values('prob_ITM', ascending=False)
+
+    st.markdown("### 🔹 High-Probability Calls (Delta > 0.7)")
+    if not high_prob_calls.empty:
+        st.dataframe(high_prob_calls[['contractSymbol','strike','lastPrice','bid','ask','volume','openInterest','prob_ITM']])
+    else:
+        st.write("No high-probability calls found.")
+
+    st.markdown("### 🔹 High-Probability Puts (Delta > 0.7)")
+    if not high_prob_puts.empty:
+        st.dataframe(high_prob_puts[['contractSymbol','strike','lastPrice','bid','ask','volume','openInterest','prob_ITM']])
+    else:
+        st.write("No high-probability puts found.")
+
+    # Suggestion based on market bias
+    suggestion = ""
+    if market_bias == "Bullish" and not high_prob_calls.empty:
+        top_call = high_prob_calls.iloc[0]
+        suggestion = f"🟢 Consider buying {top_call['contractSymbol']} (Call) with Δ≈{round(top_call['prob_ITM'],2)}"
+    elif market_bias == "Bearish" and not high_prob_puts.empty:
+        top_put = high_prob_puts.iloc[0]
+        suggestion = f"🔴 Consider buying {top_put['contractSymbol']} (Put) with Δ≈{round(top_put['prob_ITM'],2)}"
+    elif market_bias == "Neutral":
+        suggestion = "🟡 Market is neutral: consider selling Covered Calls or Cash-Secured Puts for income."
+
+    st.markdown(f"### 💡 Suggested High-Probability Trade: {suggestion}")
+else:
+    st.info("Options data not available to suggest high-probability trades.")
+
