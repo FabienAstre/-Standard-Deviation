@@ -292,18 +292,19 @@ if fib_ticker:
     except Exception as e:
         st.error(f"Error: {e}")
 # =========================
-# Full Options Dashboard
+# Full Options Dashboard & Payoff Simulator
 # =========================
 import streamlit as st
 import yfinance as yf
 import numpy as np
+import pandas as pd
 import plotly.graph_objects as go
 
 st.set_page_config(page_title="Options Dashboard & Simulator", layout="wide")
 st.title("📊 Options Dashboard & Payoff Simulator")
 
 # =========================
-# Inputs
+# 1️⃣ Inputs
 # =========================
 col1, col2 = st.columns([1,1])
 with col1:
@@ -312,9 +313,10 @@ with col2:
     use_live_price = st.checkbox("Auto-fetch current price", value=True, key="use_live_price")
 
 # =========================
-# Fetch current price
+# 2️⃣ Fetch Current Price
 # =========================
 def get_current_price(ticker:str, fallback=100.0):
+    """Fetch last close price of the stock, fallback if unavailable"""
     try:
         h = yf.Ticker(ticker).history(period="5d")
         if not h.empty:
@@ -326,113 +328,107 @@ def get_current_price(ticker:str, fallback=100.0):
 S0 = get_current_price(ticker) if use_live_price else 100.0
 st.markdown(f"**Seed Price (S₀): `{round(S0,2)}` — baseline for payoff chart**")
 
-
 # =========================
-# Options Analysis with Greeks
+# 3️⃣ Fetch Options Chain & Greeks
 # =========================
-st.subheader("📊 Options Indicators & Greeks")
-opt_ticker = st.text_input("Ticker for options analysis", value="AAPL", key="opt_ticker")
+st.subheader("📊 Options Chain & Greeks")
+calls, puts = None, None
+market_bias = "Neutral"
 
-if opt_ticker:
-    try:
-        opt_chain = yf.Ticker(opt_ticker)
-        if not opt_chain.options:
-            st.info("No options available for this ticker.")
-        else:
-            # Select expiration
-            exp_date = st.selectbox("Select expiration date", options=opt_chain.options, key="opt_exp_date")
-            chain = opt_chain.option_chain(exp_date)
-            calls = chain.calls
-            puts = chain.puts
+try:
+    opt_chain = yf.Ticker(ticker)
+    if opt_chain.options:
+        # Select expiration
+        exp_date = st.selectbox("Select expiration date", opt_chain.options)
+        chain = opt_chain.option_chain(exp_date)
+        calls = chain.calls
+        puts = chain.puts
 
-            # Display top 5 by volume
-            st.markdown("### 🔹 Top 5 Call Options by Volume")
-            st.dataframe(calls.sort_values("volume", ascending=False).head(5))
-            st.markdown("### 🔹 Top 5 Put Options by Volume")
-            st.dataframe(puts.sort_values("volume", ascending=False).head(5))
+        # Display top options by volume
+        st.markdown("### 🔹 Top 5 Call Options by Volume")
+        st.dataframe(calls.sort_values("volume", ascending=False).head(5))
+        st.markdown("### 🔹 Top 5 Put Options by Volume")
+        st.dataframe(puts.sort_values("volume", ascending=False).head(5))
 
-            # Calculate Greeks (approximate using Black-Scholes if needed)
-            # Using yfinance, we usually have: impliedVolatility, delta, gamma, theta, vega, rho
-            # If missing, we'll set as None
-            def extract_greeks(df):
-                greeks_list = []
-                for _, row in df.head(5).iterrows():
-                    greeks_list.append({
-                        'Contract': row['contractSymbol'],
-                        'Strike': row['strike'],
-                        'Last Price': row['lastPrice'],
-                        'Bid': row['bid'],
-                        'Ask': row['ask'],
-                        'Volume': row['volume'],
-                        'Open Interest': row['openInterest'],
-                        'Implied Volatility': row.get('impliedVolatility', None),
-                        'Delta': row.get('delta', None),
-                        'Gamma': row.get('gamma', None),
-                        'Theta': row.get('theta', None),
-                        'Vega': row.get('vega', None),
-                        'Rho': row.get('rho', None),
-                    })
-                return pd.DataFrame(greeks_list)
+        # Market bias based on open interest
+        call_oi = calls['openInterest'].sum()
+        put_oi = puts['openInterest'].sum()
+        if call_oi > put_oi * 1.2:
+            market_bias = "Bullish"
+        elif put_oi > call_oi * 1.2:
+            market_bias = "Bearish"
 
-            st.markdown("### 📈 Top Calls with Greeks")
-            calls_greeks = extract_greeks(calls)
-            st.dataframe(calls_greeks)
+        # Extract Greeks for top 5 options
+        def extract_greeks(df):
+            """Returns a DataFrame with Greeks and key data"""
+            greeks_list = []
+            for _, row in df.head(5).iterrows():
+                greeks_list.append({
+                    'Contract': row['contractSymbol'],
+                    'Strike': row['strike'],
+                    'Last Price': row['lastPrice'],
+                    'Bid': row['bid'],
+                    'Ask': row['ask'],
+                    'Volume': row['volume'],
+                    'Open Interest': row['openInterest'],
+                    'Implied Volatility': row.get('impliedVolatility', None),
+                    'Delta': row.get('delta', None),
+                    'Gamma': row.get('gamma', None),
+                    'Theta': row.get('theta', None),
+                    'Vega': row.get('vega', None),
+                    'Rho': row.get('rho', None),
+                })
+            return pd.DataFrame(greeks_list)
 
-            st.markdown("### 📉 Top Puts with Greeks")
-            puts_greeks = extract_greeks(puts)
-            st.dataframe(puts_greeks)
+        st.markdown("### 📈 Top Calls with Greeks")
+        st.dataframe(extract_greeks(calls))
 
-            # Explain Greeks
-            st.markdown("""
+        st.markdown("### 📉 Top Puts with Greeks")
+        st.dataframe(extract_greeks(puts))
+
+        st.markdown("""
 ### 💡 Greek Explanation
-- **Delta (Δ):** How much the option price moves for $1 move in stock.  
-- **Gamma (Γ):** How much Delta changes if stock moves $1.  
-- **Theta (Θ):** Time decay of the option per day. Negative for buyers.  
-- **Vega (ν):** Sensitivity to implied volatility. Higher IV → option price rises.  
-- **Rho (ρ):** Sensitivity to interest rate changes.
+- **Delta (Δ):** Expected price change in option per $1 move in stock. Also ≈ probability option finishes ITM.
+- **Gamma (Γ):** Rate of change of Delta if stock moves $1.
+- **Theta (Θ):** Daily time decay of option; negative for buyers.
+- **Vega (ν):** Sensitivity to implied volatility.
+- **Rho (ρ):** Sensitivity to interest rates.
 """)
 
-            # Market bias
-            call_oi = calls['openInterest'].sum()
-            put_oi = puts['openInterest'].sum()
-            if call_oi > put_oi * 1.2:
-                st.success("Market Bias: Bullish (Calls dominate Open Interest)")
-            elif put_oi > call_oi * 1.2:
-                st.error("Market Bias: Bearish (Puts dominate Open Interest)")
-            else:
-                st.info("Market Bias: Neutral")
+    else:
+        st.info("No options available for this ticker.")
 
-    except Exception as e:
-        st.error(f"Error fetching options: {e}")
+except Exception as e:
+    st.warning(f"Error fetching options: {e}")
 
+st.write(f"**Market Bias:** {market_bias}")
 
 # =========================
-# Options Education
+# 4️⃣ Options Education
 # =========================
-st.subheader("📘 Options Basics & Explanation")
+st.subheader("📘 Options Basics")
 st.markdown("""
-**Options come in two main types:**
-
-- **Call Option** → Right (not obligation) to **BUY** a stock at strike price before expiration.
-- **Put Option** → Right (not obligation) to **SELL** a stock at strike price before expiration.
+**Two Main Types of Options:**
+- **Call Option:** Right to BUY at strike price → bullish strategy.
+- **Put Option:** Right to SELL at strike price → bearish strategy.
 
 **Quick Tips:**
-- Calls = Bullish
-- Puts = Bearish
-- Covered Call: Collect premium, risk losing shares
-- Cash-Secured Put: Collect premium, potential to buy stock at discount
+- Calls = Bet stock will rise.
+- Puts = Bet stock will fall.
+- Covered Call: Sell calls to collect premium; risk losing stock if it rises.
+- Cash-Secured Put: Sell puts to collect premium; may have to buy stock at strike.
 """)
 
 # =========================
-# Payoff Simulator
+# 5️⃣ Payoff Simulator
 # =========================
-st.subheader("🎓 Options Payoff Simulator")
+st.subheader("🎓 Payoff Simulator")
+
 colA, colB = st.columns([1,1])
 with colA:
     strategy = st.selectbox(
         "Choose a strategy",
-        ["Long Call", "Long Put", "Covered Call", "Cash-Secured Put", "Bull Call Spread"],
-        key="strategy"
+        ["Long Call", "Long Put", "Covered Call", "Cash-Secured Put", "Bull Call Spread"]
     )
 with colB:
     rng = st.slider(
@@ -442,15 +438,15 @@ with colB:
         value=(int(S0*0.6), int(S0*1.4)),
         step=1
     )
-S_grid = np.linspace(rng[0], rng[1], 300)
 
+S_grid = np.linspace(rng[0], rng[1], 300)
 K = st.number_input("Strike Price (K)", value=int(S0), step=1)
 premium = st.number_input("Option Premium ($)", value=5.0, step=0.1)
 K2 = None
 if strategy == "Bull Call Spread":
     K2 = st.number_input("Second Strike Price (K2)", value=int(S0+10), step=1)
 
-# Payoff calculation
+# Calculate payoff
 if strategy == "Long Call":
     payoff = np.maximum(S_grid - K,0) - premium
     breakeven = K + premium
@@ -486,24 +482,22 @@ fig.update_layout(title=f"{strategy} Payoff at Expiration", xaxis_title="Underly
 st.plotly_chart(fig, use_container_width=True)
 
 # =========================
-# Recommendation
+# 6️⃣ Recommendation & Insights
 # =========================
 st.subheader("💡 Recommendation & Insights")
-st.write(f"Market Bias: {market_bias}")
-recommendation = ""
-advice = ""
+recommendation, advice = "", ""
 
 if strategy == "Long Call":
     if S0 < K:
         recommendation = "🟢 Buy Call"
-        advice = "Expect stock to rise above strike; favorable if bullish bias."
+        advice = "Expect stock to rise above strike; favorable if bullish."
     else:
         recommendation = "⚠️ Call is In-The-Money"
         advice = "Premium may be high; check risk/reward."
 elif strategy == "Long Put":
     if S0 > K:
         recommendation = "🟢 Buy Put"
-        advice = "Expect stock to drop below strike; favorable if bearish bias."
+        advice = "Expect stock to drop below strike; favorable if bearish."
     else:
         recommendation = "⚠️ Put is In-The-Money"
         advice = "Premium may be high; check risk/reward."
@@ -515,50 +509,40 @@ elif strategy == "Cash-Secured Put":
     advice = f"Collect premium; potential to buy stock at discount. Market bias: {market_bias}."
 elif strategy == "Bull Call Spread":
     recommendation = "🟢 Bull Call Spread"
-    advice = f"Moderate bullish view; limits upside and risk. Market bias: {market_bias}."
+    advice = f"Moderate bullish view; limits upside/risk. Market bias: {market_bias}."
 
 st.markdown(f"### Recommendation: {recommendation}")
 st.markdown(f"**Advice:** {advice}")
 st.write(f"**Breakeven:** {breakeven}, **Max Profit:** {max_profit}, **Max Loss:** {max_loss}")
 
 # =========================
-# High-Probability Option Picks
+# 7️⃣ High-Probability Option Picks
 # =========================
 st.subheader("📈 High-Probability Option Picks")
-
 if calls is not None and puts is not None:
-    # Approximate probability using Delta (calls) as a proxy
-    calls['prob_ITM'] = calls.get('delta', 0.5)  # if delta missing, assume 50%
-    puts['prob_ITM'] = abs(puts.get('delta', -0.5))  # absolute delta for puts
+    # Approximate probability using Delta
+    calls['prob_ITM'] = calls.get('delta', 0.5)
+    puts['prob_ITM'] = abs(puts.get('delta', 0.5))
 
-    # Filter for high probability (e.g., delta > 0.7)
     high_prob_calls = calls[calls['prob_ITM'] >= 0.7].sort_values('prob_ITM', ascending=False)
     high_prob_puts = puts[puts['prob_ITM'] >= 0.7].sort_values('prob_ITM', ascending=False)
 
-    st.markdown("### 🔹 High-Probability Calls (Delta > 0.7)")
-    if not high_prob_calls.empty:
-        st.dataframe(high_prob_calls[['contractSymbol','strike','lastPrice','bid','ask','volume','openInterest','prob_ITM']])
-    else:
-        st.write("No high-probability calls found.")
+    st.markdown("### 🔹 High-Probability Calls (Delta ≥ 0.7)")
+    st.dataframe(high_prob_calls[['contractSymbol','strike','lastPrice','bid','ask','volume','openInterest','prob_ITM']])
+    st.markdown("### 🔹 High-Probability Puts (Delta ≥ 0.7)")
+    st.dataframe(high_prob_puts[['contractSymbol','strike','lastPrice','bid','ask','volume','openInterest','prob_ITM']])
 
-    st.markdown("### 🔹 High-Probability Puts (Delta > 0.7)")
-    if not high_prob_puts.empty:
-        st.dataframe(high_prob_puts[['contractSymbol','strike','lastPrice','bid','ask','volume','openInterest','prob_ITM']])
-    else:
-        st.write("No high-probability puts found.")
-
-    # Suggestion based on market bias
+    # Suggest top actionable trade
     suggestion = ""
     if market_bias == "Bullish" and not high_prob_calls.empty:
         top_call = high_prob_calls.iloc[0]
-        suggestion = f"🟢 Consider buying {top_call['contractSymbol']} (Call) with Δ≈{round(top_call['prob_ITM'],2)}"
+        suggestion = f"🟢 Buy {top_call['contractSymbol']} (Call) Δ≈{round(top_call['prob_ITM'],2)}"
     elif market_bias == "Bearish" and not high_prob_puts.empty:
         top_put = high_prob_puts.iloc[0]
-        suggestion = f"🔴 Consider buying {top_put['contractSymbol']} (Put) with Δ≈{round(top_put['prob_ITM'],2)}"
-    elif market_bias == "Neutral":
-        suggestion = "🟡 Market is neutral: consider selling Covered Calls or Cash-Secured Puts for income."
+        suggestion = f"🔴 Buy {top_put['contractSymbol']} (Put) Δ≈{round(top_put['prob_ITM'],2)}"
+    else:
+        suggestion = "🟡 Market neutral: consider selling Covered Calls or Cash-Secured Puts for income."
 
     st.markdown(f"### 💡 Suggested High-Probability Trade: {suggestion}")
 else:
-    st.info("Options data not available to suggest high-probability trades.")
-
+    st.info("Options data not available for high-probability suggestions.")
