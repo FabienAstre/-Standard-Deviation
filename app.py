@@ -433,20 +433,50 @@ st.markdown("### 📊 Strategy Insights")
 st.write(f"**Breakeven Price:** {breakeven}")
 st.write(f"**Max Profit:** {max_profit}")
 st.write(f"**Max Loss:** {max_loss}")
-
 # -----------------------------
-# Recommendation
+# Enhanced Recommendation Logic
 # -----------------------------
 recommendation = ""
+advice = ""
+
+# Determine market bias
+market_bias = "Neutral"
+if calls is not None and puts is not None:
+    call_oi = calls['openInterest'].sum()
+    put_oi = puts['openInterest'].sum()
+    if call_oi > put_oi * 1.2:
+        market_bias = "Bullish"
+    elif put_oi > call_oi * 1.2:
+        market_bias = "Bearish"
+
+# Strategy-based advice
 if strategy == "Long Call":
-    recommendation = "🟢 Buy Call" if S0 < K else "⚠️ Call is in-the-money; check premium"
+    if S0 < K:
+        recommendation = "🟢 Consider Buying Call"
+        advice = "Expect stock to rise above strike before expiration; favorable if bullish bias."
+    else:
+        recommendation = "⚠️ Call is In-The-Money"
+        advice = "Premium may be high; ensure upside justifies cost."
+
 elif strategy == "Long Put":
-    recommendation = "🟢 Buy Put" if S0 > K else "⚠️ Put is in-the-money; check premium"
+    if S0 > K:
+        recommendation = "🟢 Consider Buying Put"
+        advice = "Expect stock to drop below strike; favorable if bearish bias."
+    else:
+        recommendation = "⚠️ Put is In-The-Money"
+        advice = "Premium may be high; check risk/reward."
+
 elif strategy == "Covered Call":
-    recommendation = "🟡 Covered Call: collect premium, limited upside"
+    recommendation = "🟡 Sell Covered Call"
+    advice = f"Collect premium, but stock may be called away. Works if slightly bullish to neutral. Market bias: {market_bias}."
+
 elif strategy == "Cash-Secured Put":
-    recommendation = "🟢 Sell Put to potentially acquire stock at discount"
+    recommendation = "🟢 Sell Cash-Secured Put"
+    advice = f"Collect premium with potential to buy stock at discount if assigned. Market bias: {market_bias}."
+
 elif strategy == "Bull Call Spread":
-    recommendation = "🟢 Bull Call Spread: moderate bullish view" if S0 < K else "🟡 Spread may have limited upside"
+    recommendation = "🟢 Bull Call Spread"
+    advice = f"Moderate bullish view, limits both upside and risk. Market bias: {market_bias}."
 
 st.markdown(f"### 💡 Recommendation: {recommendation}")
+st.markdown(f"**Advice:** {advice}")
