@@ -547,3 +547,340 @@ if calls is not None and puts is not None:
 else:
     st.info("Options data not available for high-probability suggestions.")
 
+
+
+
+# app.py — Options Decision Matrix & Strategy Recommender
+# Built for Streamlit
+
+import streamlit as st
+import yfinance as yf
+import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+from datetime import datetime, timedelta
+
+st.set_page_config(page_title="Options Decision Matrix", layout="wide")
+st.title("🧭 Options Decision Matrix — Direction × Volatility")
+st.caption("Type a ticker, we infer trend & vol regime, then recommend an options strategy with a payoff preview.")
+
+# =========================
+# Helpers
+# =========================
+def rsi(series: pd.Series, window: int = 14) -> pd.Series:
+    delta = series.diff()
+    gain = delta.where(delta > 0, 0.0).rolling(window).mean()
+    loss = (-delta.where(delta < 0, 0.0)).rolling(window).mean()
+    rs = gain / loss
+    out = 100 - (100 / (1 + rs))
+    return out
+
+def get_hist(ticker: str, period: str = "6mo") -> pd.DataFrame:
+    try:
+        df = yf.Ticker(ticker).history(period=period)
+        if isinstance(df.index, pd.MultiIndex):
+            df = df.droplevel(0)
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+@st.cache_data(show_spinner=False)
+def get_options_snapshot(ticker: str):
+    try:
+        t = yf.Ticker(ticker)
+        expirations = t.options
+        if not expirations:
+            return None
+        # choose nearest expiry >= today
+        today = datetime.utcnow().date()
+        exp = None
+        for e in expirations:
+            try:
+                d = datetime.strptime(e, "%Y-%m-%d").date()
+                if d >= today:
+                    exp = e
+                    break
+            except Exception:
+                continue
+        if not exp:
+            exp = expirations[0]
+        chain = t.option_chain(exp)
+        return {"exp": exp, "calls": chain.calls.copy(), "puts": chain.puts.copy()}
+    except Exception:
+        return None
+
+def realized_vol(close: pd.Series, lookback: int = 21) -> float:
+    # simple 21d annualized realized vol
+    rets = close.pct_change().dropna()
+    if len(rets) < 2:
+        return float("nan")
+    window = rets.tail(lookback)
+    return float(window.std() * np.sqrt(252))
+
+def approx_atm_iv(snapshot, spot: float) -> float:
+    """Estimate ATM IV from closest strike call/put if available; else NaN."""
+    if not snapshot:
+        return float("nan")
+    calls = snapshot["calls"]
+    puts = snapshot["puts"]
+    if calls is None or puts is None or calls.empty or puts.empty:
+        return float("nan")
+    try:
+        atm_strike = calls.iloc[(calls['strike'] - spot).abs().argsort()[:1]].strike.values[0]
+        c_iv = calls.loc[calls['strike'] == atm_strike, 'impliedVolatility']
+        p_iv = puts.loc[puts['strike'] == atm_strike, 'impliedVolatility']
+        ivs = []
+        if not c_iv.empty and pd.notna(c_iv.iloc[0]):
+            ivs.append(float(c_iv.iloc[0]))
+        if not p_iv.empty and pd.notna(p_iv.iloc[0]):
+            ivs.append(float(p_iv.iloc[0]))
+        if ivs:
+            return float(np.mean(ivs))
+    except Exception:
+        pass
+    return float("nan")
+
+def trend_signal(close: pd.Series):
+    ma20 = close.rolling(20).mean()
+    ma50 = close.rolling(50).mean()
+    ma200 = close.rolling(200).mean()
+    latest = close.iloc[-1]
+    rsi14 = rsi(close).iloc[-1]
+    # Simple scoring
+    score = 0
+    # MA alignment
+    if len(ma200.dropna()) > 0:
+        if ma20.iloc[-1] > ma50.iloc[-1] > ma200.iloc[-1]:
+            score += 2
+        elif ma20.iloc[-1] > ma50.iloc[-1]:
+            score += 1
+        elif ma20.iloc[-1] < ma50.iloc[-1] < ma200.iloc[-1]:
+            score -= 2
+        elif ma20.iloc[-1] < ma50.iloc[-1]:
+            score -= 1
+    # RSI tilt
+    if rsi14 >= 70: score += 1
+    elif rsi14 <= 30: score -= 1
+
+    # Map score to direction bucket
+    if score >= 2:
+        direction = "Bullish"
+    elif score <= -2:
+        direction = "Bearish"
+    else:
+        direction = "Neutral"
+    return direction, float(rsi14), latest, ma20.iloc[-1] if not np.isnan(ma20.iloc[-1]) else np.nan, ma50.iloc[-1] if not np.isnan(ma50.iloc[-1]) else np.nan, ma200.iloc[-1] if not np.isnan(ma200.iloc[-1]) else np.nan
+
+# =========================
+# Sidebar Inputs
+# =========================
+with st.sidebar:
+    ticker = st.text_input("Ticker", value="AAPL").strip().upper()
+    period = st.selectbox("Price history window", ["3mo","6mo","1y","2y"], index=1)
+    lookback = st.slider("Realized vol lookback (days)", 10, 60, 21)
+    risk_mode = st.selectbox("Risk preference", ["Conservative","Balanced","Aggressive"], index=1)
+    own_shares = st.checkbox("I own 100+ shares (for covered calls)", value=False)
+
+# =========================
+# Data Fetch
+# =========================
+prices = get_hist(ticker, period)
+if prices.empty:
+    st.error("No price data. Try another ticker.")
+    st.stop()
+
+close = prices['Close']
+S0 = float(close.iloc[-1])
+rv = realized_vol(close, lookback)
+opt_snap = get_options_snapshot(ticker)
+iv_atm = approx_atm_iv(opt_snap, S0)
+
+# Volatility regime classification
+vol_note = ""
+if not np.isnan(iv_atm):
+    # compare IV to RV
+    ratio = iv_atm / rv if rv and rv > 0 else np.nan
+    if not np.isnan(ratio):
+        if ratio >= 1.25:
+            vol_regime = "High (IV >> RV)"
+        elif ratio <= 0.85:
+            vol_regime = "Low (IV << RV)"
+        else:
+            vol_regime = "Normal"
+    else:
+        vol_regime = "Normal"
+else:
+    # fallback using RV z-score vs its own history
+    rv_hist = close.pct_change().rolling(252).std() * np.sqrt(252)
+    z = (rv - rv_hist.mean()) / rv_hist.std() if rv_hist.std() not in [0, np.nan] else 0
+    if z > 1:
+        vol_regime = "High (RV)"
+    elif z < -1:
+        vol_regime = "Low (RV)"
+    else:
+        vol_regime = "Normal"
+    vol_note = "(IV unavailable, used realized vol proxy)"
+
+# Direction signal
+direction, rsi14, ma20, ma20v, ma50v, ma200v = trend_signal(close)
+
+# =========================
+# Header Metrics
+# =========================
+colA, colB, colC, colD = st.columns(4)
+colA.metric("Price", f"{S0:,.2f}")
+colB.metric("Direction", direction)
+colC.metric("Vol Regime", vol_regime)
+colD.metric("ATM IV", f"{iv_atm:.2%}" if not np.isnan(iv_atm) else "N/A")
+st.caption(f"RV(annualized): {rv:.2%} {vol_note}")
+
+# =========================
+# Decision Matrix
+# =========================
+MATRIX = {
+    ("Bullish", "Low"): ["Long Call", "Bull Call Debit Spread"],
+    ("Bullish", "Normal"): ["Bull Call Debit Spread", "Cash-Secured Put"],
+    ("Bullish", "High"): ["Cash-Secured Put", "Bull Put Credit Spread", "Covered Call"],
+    ("Bearish", "Low"): ["Long Put", "Bear Put Debit Spread"],
+    ("Bearish", "Normal"): ["Bear Put Debit Spread", "Call Credit Spread"],
+    ("Bearish", "High"): ["Call Credit Spread", "Covered Call (if long)"] ,
+    ("Neutral", "Low"): ["Long Straddle/Strangle"],
+    ("Neutral", "Normal"): ["Broken Wing Butterfly", "Calendar (directional)"] ,
+    ("Neutral", "High"): ["Iron Condor", "Short Strangle (defined risk)"]
+}
+
+# Normalize vol bucket keyword used as keys
+if "High" in vol_regime:
+    vol_key = "High"
+elif "Low" in vol_regime:
+    vol_key = "Low"
+else:
+    vol_key = "Normal"
+
+primary_list = MATRIX.get((direction, vol_key), ["Long Call"])  # fallback
+
+# Ownership constraint
+if not own_shares:
+    primary_list = [s for s in primary_list if "Covered Call" not in s]
+if risk_mode == "Conservative":
+    # drop undefined-risk choices
+    primary_list = [s for s in primary_list if ("Credit Spread" in s) or ("Debit Spread" in s) or ("Condor" in s) or ("Calendar" in s) or ("Covered Call" in s) or ("Cash-Secured Put" in s)]
+
+# Final pick
+strategy_pick = primary_list[0] if primary_list else ("Bull Call Debit Spread" if direction=="Bullish" else "Bear Put Debit Spread")
+
+# Show matrix table
+st.subheader("Decision Matrix Output")
+st.write(f"**Direction:** `{direction}`  |  **Volatility:** `{vol_regime}`  |  **Suggested Strategies:** {', '.join(primary_list)}")
+
+# =========================
+# Payoff Builder for Picked Strategy
+# =========================
+with st.expander("🔧 Configure Trade & Preview Payoff", expanded=True):
+    col1, col2, col3 = st.columns([1,1,1])
+
+    K = col1.number_input("Strike K", value=int(S0), step=1)
+    width = col2.number_input("Spread width (if spread)", value=5, step=1, min_value=1)
+    premium = col3.number_input("Net premium (debit + / credit -)", value=1.50, step=0.05, format="%.2f")
+
+    S_min = st.slider("Price range at expiration (Sₜ)", max(1, int(S0*0.2)), int(S0*2.0), (int(S0*0.6), int(S0*1.4)), 1)
+    S_grid = np.linspace(S_min[0], S_min[1], 300)
+
+    def payoff_curve(strategy: str, S: np.ndarray, S0: float, K: float, width: float, premium: float):
+        K2 = K + width
+        if strategy == "Long Call":
+            return np.maximum(S - K, 0) - abs(premium)
+        if strategy == "Long Put":
+            return np.maximum(K - S, 0) - abs(premium)
+        if strategy == "Bull Call Debit Spread":
+            return np.maximum(S - K, 0) - np.maximum(S - K2, 0) - abs(premium)
+        if strategy == "Bear Put Debit Spread":
+            return np.maximum(K - S, 0) - np.maximum(K2 - S, 0) - abs(premium)
+        if strategy == "Cash-Secured Put":
+            # credit => premium should be negative in our convention; profit when stays above K
+            return (-premium) - np.maximum(K - S, 0)
+        if strategy == "Call Credit Spread":
+            # short call at K, long call at K2=K+width; credit trade (premium negative)
+            return (-premium) - np.maximum(S - K, 0) + np.maximum(S - K2, 0)
+        if strategy == "Iron Condor":
+            # symmetric condor around K: (K-w, K) calls and (K, K+w) puts; approximate with width
+            Kp1, Kp2 = K - width, K
+            Kc1, Kc2 = K, K + width
+            # short put spread + short call spread; credit = -premium
+            put_spread = (-np.maximum(Kp1 - S, 0) + np.maximum(Kp2 - S, 0))
+            call_spread = (-np.maximum(S - Kc2, 0) + np.maximum(S - Kc1, 0))
+            return (-premium) + put_spread + call_spread
+        if strategy == "Long Straddle/Strangle":
+            # assume strangle with K (call) and K2=K-width (put lower); debit trade
+            Kl = K - width
+            return np.maximum(S - K, 0) + np.maximum(Kl - S, 0) - abs(premium)
+        if strategy == "Covered Call":
+            return (S - S0) + (-premium) - np.maximum(S - K, 0)
+        if strategy == "Bull Put Credit Spread":
+            # short put at K, long put at K-width; credit = -premium
+            Kl = K - width
+            return (-premium) - np.maximum(K - S, 0) + np.maximum(Kl - S, 0)
+        # default
+        return np.zeros_like(S)
+
+    y = payoff_curve(strategy_pick, S_grid, S0, K, width, premium)
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=S_grid, y=y, mode='lines', name=f'Payoff — {strategy_pick}'))
+    fig.add_hline(y=0, line_dash="dot")
+    fig.add_vline(x=S0, line_dash="dot")
+    fig.update_layout(title=f"{strategy_pick} — Payoff at Expiration", xaxis_title="Underlying Price Sₜ", yaxis_title="P/L per 1x")
+    st.plotly_chart(fig, use_container_width=True)
+
+# =========================
+# Strategy Rationale
+# =========================
+st.subheader("📋 Strategy Rationale")
+why = {
+    "Long Call": "Bullish view with low/normal IV. Defined risk (debit), uncapped upside.",
+    "Bull Call Debit Spread": "Bullish but cost-conscious; reduces debit and theta by selling a higher strike.",
+    "Cash-Secured Put": "Get paid to potentially buy at a discount; best when IV is high.",
+    "Bull Put Credit Spread": "Bullish-to-neutral with high IV; limited risk credit trade.",
+    "Long Put": "Bearish view with low/normal IV; defined risk.",
+    "Bear Put Debit Spread": "Bearish but reduce cost and theta via long put spread.",
+    "Call Credit Spread": "Bearish-to-neutral with high IV; limited risk credit trade.",
+    "Iron Condor": "Range-bound + high IV; profit if price stays inside the wings.",
+    "Long Straddle/Strangle": "Expect big move with low IV; direction-agnostic.",
+    "Covered Call": "Hold shares and sell calls for income; capped upside, downside remains.",
+}
+
+st.write(f"**Suggested Primary Strategy:** `{strategy_pick}`")
+st.write(why.get(strategy_pick, ""))
+
+# =========================
+# Options Snapshot (optional)
+# =========================
+st.subheader("🔍 Options Snapshot (nearest expiry)")
+if opt_snap:
+    exp = opt_snap["exp"]
+    calls = opt_snap["calls"].copy()
+    puts = opt_snap["puts"].copy()
+
+    # Thin the display to useful columns
+    def thin(df):
+        cols = [c for c in ["contractSymbol","lastPrice","bid","ask","impliedVolatility","delta","gamma","theta","vega","rho","openInterest","volume","strike"] if c in df.columns]
+        out = df[cols].sort_values("openInterest", ascending=False).head(15)
+        # pretty IV
+        if "impliedVolatility" in out.columns:
+            out["impliedVolatility"] = (out["impliedVolatility"].astype(float) * 100).round(2).astype(str) + "%"
+        return out
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown(f"**Calls** — Exp: `{exp}`")
+        st.dataframe(thin(calls), use_container_width=True)
+    with col2:
+        st.markdown(f"**Puts** — Exp: `{exp}`")
+        st.dataframe(thin(puts), use_container_width=True)
+else:
+    st.info("No options chain available (ticker may not have listed options or data fetch failed).")
+
+# =========================
+# Notes & Disclaimers
+# =========================
+st.caption("This tool is educational. Always manage risk. Prefer defined-risk spreads over naked selling, especially into earnings or high gap risk situations.")
