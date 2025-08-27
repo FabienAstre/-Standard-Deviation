@@ -547,57 +547,152 @@ if calls is not None and puts is not None:
 else:
     st.info("Options data not available for high-probability suggestions.")
 
+# app.py
+import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import plotly.graph_objects as go
 
-# Example ticker
-ticker = "AAPL"
-stock = yf.Ticker(ticker)
+st.set_page_config(page_title="Trading Dashboard", layout="wide")
+st.title("📉 Quantitative Trading Dashboard")
+st.write("""
+This app combines a **Stock & Crypto Screener**, **Options Simulator**, and **Earnings Backtester**  
+to help explore edges in trading strategies.
+""")
 
-# Get earnings dates
-earnings_calendar = stock.get_earnings_dates(limit=12)
-print("Upcoming Earnings:\n", earnings_calendar)
+# ====================================
+# 🔹 Helper Functions
+# ====================================
+def calculate_rsi(prices, window=14):
+    delta = prices.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
 
-# Historical prices
-hist = stock.history(period="1y")
+def get_current_price(ticker, fallback=100.0):
+    try:
+        h = yf.Ticker(ticker).history(period="5d")
+        if not h.empty:
+            return float(h["Close"][-1])
+    except:
+        pass
+    return fallback
 
-# Define backtest function
-def earnings_backtest(ticker="AAPL", days_before=1, days_after=1, option_strike="ATM"):
+def earnings_backtest(ticker="AAPL", days_before=1, days_after=1):
+    """Naive straddle backtest around earnings"""
     stock = yf.Ticker(ticker)
-    earnings = stock.get_earnings_dates(limit=12)
     hist = stock.history(period="1y")
+    earnings = stock.get_earnings_dates(limit=6)
     
     results = []
     for date in earnings.index:
         date_str = str(date.date())
-        
         try:
-            # Pick close before earnings
+            # Price move
             pre_close = hist.loc[:date_str].iloc[-days_before]["Close"]
             post_close = hist.loc[date_str:].iloc[days_after]["Close"]
             move = abs(post_close - pre_close) / pre_close
-            
-            # Approximate implied move via options
-            opt_chain = stock.option_chain(date_str)  # requires exact expiry match
-            calls = opt_chain.calls
-            puts = opt_chain.puts
+
+            # Pick nearest option expiry after earnings
+            expirations = stock.options
+            if not expirations:
+                continue
+            exp_date = min([e for e in expirations if e >= date_str])
+            chain = stock.option_chain(exp_date)
+
+            # Find ATM straddle
+            calls, puts = chain.calls, chain.puts
             atm_strike = calls.iloc[(calls['strike']-pre_close).abs().argsort()[:1]].strike.values[0]
-            
-            # Approximate cost of straddle
             call_price = calls[calls['strike']==atm_strike].iloc[0].lastPrice
             put_price = puts[puts['strike']==atm_strike].iloc[0].lastPrice
             straddle_cost = call_price + put_price
-            
-            pnl = straddle_cost - abs(post_close - pre_close)  # seller PnL
-            results.append({"Earnings": date_str, "PreClose": pre_close, 
-                            "PostClose": post_close, "Move%": move*100,
-                            "StraddleCost": straddle_cost, "PnL": pnl})
+
+            pnl = straddle_cost - abs(post_close - pre_close)  # seller’s PnL
+            results.append({
+                "Earnings Date": date_str,
+                "Pre-Close": pre_close,
+                "Post-Close": post_close,
+                "Move%": round(move*100,2),
+                "StraddleCost": straddle_cost,
+                "PnL (Seller)": round(pnl,2)
+            })
         except:
             continue
-    
+
     return pd.DataFrame(results)
 
-results = earnings_backtest("AAPL")
-print(results)
+# ====================================
+# 🔹 Tabs for Navigation
+# ====================================
+tab1, tab2, tab3 = st.tabs(["📑 Screener", "📊 Options Simulator", "💥 Earnings Backtest"])
 
+# ====================================
+# Tab 1: Screener
+# ====================================
+with tab1:
+    tickers_input = st.text_input("Enter tickers (comma-separated)", "AAPL, MSFT, BTC-USD")
+    period = st.selectbox("History Period", ['1mo','3mo','6mo','1y','2y','5y'])
+    tickers = [t.strip().upper() for t in tickers_input.split(",") if t.strip()]
+    
+    results = []
+    for t in tickers:
+        try:
+            data = yf.Ticker(t).history(period=period)
+            if data.empty: continue
+            prices = data['Close']
+            z = (prices[-1] - prices.mean()) / prices.std()
+            rsi = calculate_rsi(prices).iloc[-1]
+            results.append({"Ticker": t, "Price": round(prices[-1],2), "Z-score": round(z,2), "RSI": round(rsi,2)})
+        except: pass
+
+    if results:
+        df = pd.DataFrame(results)
+        st.dataframe(df, use_container_width=True)
+
+# ====================================
+# Tab 2: Options Simulator
+# ====================================
+with tab2:
+    ticker = st.text_input("Ticker", "AAPL", key="opt_ticker")
+    S0 = get_current_price(ticker)
+    st.write(f"Current Price: **{S0}**")
+
+    strategy = st.selectbox("Choose Strategy", ["Long Call","Long Put","Covered Call","Cash-Secured Put","Bull Call Spread"])
+    K = st.number_input("Strike K", value=int(S0), step=1)
+    premium = st.number_input("Premium", value=5.0, step=0.1)
+    K2 = None
+    if strategy=="Bull Call Spread":
+        K2 = st.number_input("Strike K2", value=int(S0+10), step=1)
+
+    # Payoff calc
+    S_grid = np.linspace(S0*0.5, S0*1.5, 200)
+    if strategy=="Long Call":
+        payoff = np.maximum(S_grid-K,0)-premium
+    elif strategy=="Long Put":
+        payoff = np.maximum(K-S_grid,0)-premium
+    elif strategy=="Covered Call":
+        payoff = (S_grid-S0)+premium-np.maximum(S_grid-K,0)
+    elif strategy=="Cash-Secured Put":
+        payoff = premium-np.maximum(K-S_grid,0)
+    elif strategy=="Bull Call Spread":
+        payoff = np.maximum(S_grid-K,0)-np.maximum(S_grid-K2,0)-premium
+    else:
+        payoff = np.zeros_like(S_grid)
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=S_grid,y=payoff,mode="lines",name="Payoff"))
+    st.plotly_chart(fig,use_container_width=True)
+
+# ====================================
+# Tab 3: Earnings Backtest
+# ====================================
+with tab3:
+    ticker = st.text_input("Ticker", "AAPL", key="earn_ticker")
+    df = earnings_backtest(ticker)
+    if not df.empty:
+        st.dataframe(df, use_container_width=True)
+        st.download_button("Download Results", data=df.to_csv(index=False), file_name=f"{ticker}_earnings_backtest.csv")
+    else:
+        st.info("No earnings backtest data available.")
