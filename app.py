@@ -546,3 +546,58 @@ if calls is not None and puts is not None:
     st.markdown(f"### 💡 Suggested High-Probability Trade: {suggestion}")
 else:
     st.info("Options data not available for high-probability suggestions.")
+
+import yfinance as yf
+import pandas as pd
+import numpy as np
+
+# Example ticker
+ticker = "AAPL"
+stock = yf.Ticker(ticker)
+
+# Get earnings dates
+earnings_calendar = stock.get_earnings_dates(limit=12)
+print("Upcoming Earnings:\n", earnings_calendar)
+
+# Historical prices
+hist = stock.history(period="1y")
+
+# Define backtest function
+def earnings_backtest(ticker="AAPL", days_before=1, days_after=1, option_strike="ATM"):
+    stock = yf.Ticker(ticker)
+    earnings = stock.get_earnings_dates(limit=12)
+    hist = stock.history(period="1y")
+    
+    results = []
+    for date in earnings.index:
+        date_str = str(date.date())
+        
+        try:
+            # Pick close before earnings
+            pre_close = hist.loc[:date_str].iloc[-days_before]["Close"]
+            post_close = hist.loc[date_str:].iloc[days_after]["Close"]
+            move = abs(post_close - pre_close) / pre_close
+            
+            # Approximate implied move via options
+            opt_chain = stock.option_chain(date_str)  # requires exact expiry match
+            calls = opt_chain.calls
+            puts = opt_chain.puts
+            atm_strike = calls.iloc[(calls['strike']-pre_close).abs().argsort()[:1]].strike.values[0]
+            
+            # Approximate cost of straddle
+            call_price = calls[calls['strike']==atm_strike].iloc[0].lastPrice
+            put_price = puts[puts['strike']==atm_strike].iloc[0].lastPrice
+            straddle_cost = call_price + put_price
+            
+            pnl = straddle_cost - abs(post_close - pre_close)  # seller PnL
+            results.append({"Earnings": date_str, "PreClose": pre_close, 
+                            "PostClose": post_close, "Move%": move*100,
+                            "StraddleCost": straddle_cost, "PnL": pnl})
+        except:
+            continue
+    
+    return pd.DataFrame(results)
+
+results = earnings_backtest("AAPL")
+print(results)
+
